@@ -5,9 +5,11 @@ import pandas as pd
 from tqdm import tqdm
 from unet import get_unet
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 
 # ─── EXPERIMENT CONFIGURATION ─────────────────────────────
 NUM_CLASSES = 5   # Set to 4 or 5
+BATCH_SIZE = 32   # Set to 4 for local testing if GPU memory is low, 32-64 for Vast.ai
 
 if NUM_CLASSES == 5:
     TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
@@ -33,7 +35,6 @@ else:
     RAW_IMAGES = os.path.join(DATA_DIR, "images")
     INPUT_CSV = os.path.join(DATA_DIR, CSV_NAME)
     if not os.path.exists(INPUT_CSV):
-        # Fallback to metadata directory
         INPUT_CSV = os.path.join("metadata", CSV_NAME)
         
     OUTPUT_BASE = "."
@@ -42,58 +43,99 @@ else:
 
 FINAL_METADATA = os.path.join(METADATA_DIR, f"DATA_ROI_{NUM_CLASSES}CLASS.csv")
 WEIGHTS = "weights/cxr_reg_weights.best.hdf5"
-IMG_SIZE = 384  # Updated for merged Kaggle dataset
-
+IMG_SIZE = 384  
 # ──────────────────────────────────────────────────────────
 
-class LungProcessor:
-    def __init__(self, weights_path, img_size=384):
-        self.img_size = img_size
+def load_and_preprocess_single_image(args):
+    """Loads a single image, applies CLAHE, and prepares it for the model."""
+    img_name, in_path, img_size = args
+    
+    img = cv2.imread(in_path, cv2.IMREAD_GRAYSCALE)
+    if img is None:
+        return img_name, None, None
+        
+    if img.shape[:2] != (img_size, img_size):
+        img = cv2.resize(img, (img_size, img_size), interpolation=cv2.INTER_LANCZOS4)
+        
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    enhanced = clahe.apply(img)
+    
+    img_in = enhanced.astype(np.float32) / 255.0
+    img_in = np.expand_dims(img_in, axis=-1) 
+    
+    return img_name, enhanced, img_in
 
-        # Build the U-Net architecture with input shape (img_size, img_size, 1) for grayscale images
+def save_single_roi(args):
+    """Applies mask and saves the ROI image to disk."""
+    out_path, enhanced, mask_binary = args
+    roi_img = cv2.bitwise_and(enhanced, enhanced, mask=mask_binary)
+    cv2.imwrite(out_path, roi_img)
+
+class BatchedLungProcessor:
+    def __init__(self, weights_path, img_size=384, batch_size=32):
+        self.img_size = img_size
+        self.batch_size = batch_size
         self.model = get_unet((img_size, img_size, 1))
 
-        # Load the pre-trained weights into the model
         if not os.path.exists(weights_path):
             raise FileNotFoundError(f"Weights not found at {weights_path}. Please download them first.")
         self.model.load_weights(weights_path)
 
-        # Initialize CLAHE (Contrast Limited Adaptive Histogram Equalization) for image enhancement
-        self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    def process_dataset(self, image_names, raw_dir, out_dir):
+        """Processes a list of image names in batches using ThreadPool for I/O."""
+        
+        # Filter out images that already exist in output
+        pending_images = [img for img in image_names if not os.path.exists(os.path.join(out_dir, img))]
+        if not pending_images:
+            return
 
-    def process(self, img_path):
-        # Step 1: Load and preprocess the image
-        img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
-        if img is None:
-            return None  # Return None if image loading fails
-            
-        # Resize just in case, though they should already be 384x384
-        if img.shape[:2] != (self.img_size, self.img_size):
-            img = cv2.resize(img, (self.img_size, self.img_size), interpolation=cv2.INTER_LANCZOS4)
-            
-        enhanced = self.clahe.apply(img)  # Apply CLAHE for contrast enhancement
+        print(f"Processing {len(pending_images)} images in batches of {self.batch_size}...")
 
-        # Step 2: Prepare image for model prediction
-        img_in = enhanced.astype(np.float32) / 255.0  # Normalize to [0, 1]
-        img_in = np.expand_dims(img_in, axis=(0, -1))  # Add batch and channel dimensions
-
-        # Step 3: Predict segmentation mask using the U-Net model
-        mask = self.model.predict(img_in, verbose=0)[0]  # Get prediction, remove batch dim
-        mask_binary = (mask > 0.5).astype(np.uint8)  # Threshold to create binary mask
-
-        # Step 4: Apply mask to isolate lung regions
-        return cv2.bitwise_and(enhanced, enhanced, mask=mask_binary)
+        # Create batches
+        batches = [pending_images[i:i + self.batch_size] for i in range(0, len(pending_images), self.batch_size)]
+        
+        # We use a ThreadPoolExecutor to speed up loading and saving (I/O bound)
+        # while the main thread handles GPU prediction (Compute bound)
+        with ThreadPoolExecutor(max_workers=os.cpu_count() or 4) as executor:
+            for batch_names in tqdm(batches):
+                
+                # 1. Parallel Load & Preprocess (CPU)
+                load_args = [(name, os.path.join(raw_dir, name), self.img_size) for name in batch_names]
+                loaded_results = list(executor.map(load_and_preprocess_single_image, load_args))
+                
+                valid_names = []
+                enhanced_imgs = []
+                model_inputs = []
+                
+                for name, enhanced, img_in in loaded_results:
+                    if enhanced is not None:
+                        valid_names.append(name)
+                        enhanced_imgs.append(enhanced)
+                        model_inputs.append(img_in)
+                
+                if not model_inputs:
+                    continue
+                    
+                # 2. Batched Prediction (GPU)
+                batch_tensor = np.array(model_inputs)
+                masks = self.model.predict(batch_tensor, verbose=0)
+                masks_binary = (masks > 0.5).astype(np.uint8)
+                
+                # 3. Parallel Masking & Save (CPU)
+                save_args = [
+                    (os.path.join(out_dir, name), enhanced_imgs[i], masks_binary[i, :, :, 0])
+                    for i, name in enumerate(valid_names)
+                ]
+                # Execute saves in parallel
+                list(executor.map(save_single_roi, save_args))
 
 
 def download_weights_if_needed():
     if not os.path.exists(WEIGHTS):
         print("U-Net weights not found locally. Attempting to download via Kaggle API...")
         os.makedirs(os.path.dirname(WEIGHTS), exist_ok=True)
-        # We download from the specific kernel output mentioned
         os.system("kaggle kernels output nikhilpandey360/lung-segmentation-from-chest-x-ray-dataset -p ./weights/")
         
-        # In case the file was named slightly differently or placed in a subfolder,
-        # we check the weights directory
         files = os.listdir("./weights/")
         hdf5_files = [f for f in files if f.endswith('.hdf5') or f.endswith('.h5')]
         if hdf5_files and hdf5_files[0] != os.path.basename(WEIGHTS):
@@ -104,11 +146,7 @@ def download_weights_if_needed():
         else:
             print(f"Warning: Could not download or find {WEIGHTS}")
 
-def run_targeted_pipeline():
-    parser = argparse.ArgumentParser(description="Preprocess Chest X-Rays with U-Net")
-    parser.add_argument('--download-weights', action='store_true', help="Download U-Net weights from Kaggle")
-    args = parser.parse_args()
-
+def run_targeted_pipeline(args):
     if args.download_weights:
         download_weights_if_needed()
 
@@ -121,17 +159,10 @@ def run_targeted_pipeline():
         return
         
     df = pd.read_csv(INPUT_CSV)
-    
-    # We already have 0/1 columns from A_prepare_data.py for TARGET_CLASSES
-    # Keep only samples that have at least one target class (they all should anyway)
     target_df = df[df[TARGET_CLASSES].sum(axis=1) > 0].copy()
 
     print("\nStep 2: Calculating dynamic class balancing...")
-    # Find the count of each class
     class_counts = {cls: target_df[cls].sum() for cls in TARGET_CLASSES}
-    
-    # Target maximum samples per class to ensure minority classes are oversampled 
-    # to match the majority class (usually Normal or Atelectasis)
     target_samples_per_class = max(class_counts.values())
     
     print(f"Class counts: {class_counts}")
@@ -145,47 +176,34 @@ def run_targeted_pipeline():
         count = len(subset)
         
         if count == 0:
-            print(f" - {cls}: 0 base images. Skipping.")
             continue
             
         multiplier = max(1, target_samples_per_class // count)
-        
         print(f" - {cls}: {count} base images. Augmentation factor: {multiplier}x")
         
         for i in range(multiplier):
             temp = subset.copy()
-            temp['aug_instance'] = i # Tracking ID for Grad-CAM
+            temp['aug_instance'] = i 
             balanced_list.append(temp)
             unique_images_to_process.update(subset['Image_ID'].tolist())
-            
-        # Add remainder if we want exactly max_samples (optional, simplified here by just using multiplier)
 
-    print(f"\nStep 3: ROI Isolation for {len(unique_images_to_process)} unique images (Skipping existing)...")
+    print(f"\nStep 3: Batched ROI Isolation for {len(unique_images_to_process)} unique images...")
     try:
-        processor = LungProcessor(WEIGHTS, img_size=IMG_SIZE)
+        processor = BatchedLungProcessor(WEIGHTS, img_size=IMG_SIZE, batch_size=args.batch_size)
+        processor.process_dataset(list(unique_images_to_process), RAW_IMAGES, ROI_OUTPUT)
     except FileNotFoundError as e:
         print(e)
         print("Run with --download-weights to fetch them automatically.")
         return
-    
-    for img_name in tqdm(list(unique_images_to_process)):
-        in_path = os.path.join(RAW_IMAGES, img_name)
-        out_path = os.path.join(ROI_OUTPUT, img_name)
-        
-        # Safety Check: skip if file already exists from previous run 
-        if os.path.exists(out_path): continue
-        
-        # Some paths from Chexpert might be deeply nested in raw format, but our A_ script flattens them
-        if not os.path.exists(in_path):
-            continue
-            
-        roi_img = processor.process(in_path)
-        if roi_img is not None:
-            cv2.imwrite(out_path, roi_img)
 
     final_df = pd.concat(balanced_list)
     final_df.to_csv(FINAL_METADATA, index=False)
     print(f"\nPipeline Complete! Balanced {NUM_CLASSES}-class metadata saved to {FINAL_METADATA}")
 
 if __name__ == "__main__":
-    run_targeted_pipeline()
+    parser = argparse.ArgumentParser(description="Preprocess Chest X-Rays with U-Net")
+    parser.add_argument('--download-weights', action='store_true', help="Download U-Net weights from Kaggle")
+    parser.add_argument('--batch-size', type=int, default=BATCH_SIZE, help="Batch size for GPU inference")
+    args = parser.parse_args()
+    
+    run_targeted_pipeline(args)
