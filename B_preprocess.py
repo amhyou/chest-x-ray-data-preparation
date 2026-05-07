@@ -18,28 +18,33 @@ else:
     TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
     CSV_NAME = "master_384_4class_labels.csv"
 
-# Check if running in Kaggle environment
-IS_KAGGLE = os.path.exists('/kaggle/input')
+# Robust Path Resolution
+# Search multiple potential locations for the dataset
+POTENTIAL_DATA_DIRS = [
+    f"/kaggle/input/thesis-dataset-5classes",  # Kaggle UI "Add Data"
+    f"data_384_{NUM_CLASSES}class",            # Local or Vast.ai standard structure
+    f".",                                      # If extracted directly into the current directory
+]
 
-if IS_KAGGLE:
-    DATA_DIR = f"/kaggle/input/thesis-dataset-5classes"
-    RAW_IMAGES = os.path.join(DATA_DIR, "images")
-    INPUT_CSV = os.path.join(DATA_DIR, CSV_NAME)
-    
-    OUTPUT_BASE = "/kaggle/working"
-    ROI_OUTPUT = os.path.join(OUTPUT_BASE, "roi")
-    METADATA_DIR = os.path.join(OUTPUT_BASE, "metadata")
-else:
-    # Local fallback
-    DATA_DIR = f"data_384_{NUM_CLASSES}class"
-    RAW_IMAGES = os.path.join(DATA_DIR, "images")
-    INPUT_CSV = os.path.join(DATA_DIR, CSV_NAME)
-    if not os.path.exists(INPUT_CSV):
-        INPUT_CSV = os.path.join("metadata", CSV_NAME)
-        
-    OUTPUT_BASE = "."
-    ROI_OUTPUT = os.path.join(OUTPUT_BASE, f"data_roi_{NUM_CLASSES}class")
-    METADATA_DIR = os.path.join(OUTPUT_BASE, "metadata")
+INPUT_CSV = None
+RAW_IMAGES = None
+
+for d in POTENTIAL_DATA_DIRS:
+    candidate_csv = os.path.join(d, CSV_NAME)
+    if os.path.exists(candidate_csv):
+        INPUT_CSV = candidate_csv
+        RAW_IMAGES = os.path.join(d, "images")
+        break
+
+# Fallback just for metadata if A_prepare_data wasn't run but the repo has the reference CSV
+if not INPUT_CSV and os.path.exists(os.path.join("metadata", CSV_NAME)):
+    INPUT_CSV = os.path.join("metadata", CSV_NAME)
+    RAW_IMAGES = os.path.join(f"data_384_{NUM_CLASSES}class", "images")
+
+# Output paths
+OUTPUT_BASE = "/kaggle/working" if os.path.exists('/kaggle/working') else "."
+ROI_OUTPUT = os.path.join(OUTPUT_BASE, f"data_roi_{NUM_CLASSES}class")
+METADATA_DIR = os.path.join(OUTPUT_BASE, "metadata")
 
 FINAL_METADATA = os.path.join(METADATA_DIR, f"DATA_ROI_{NUM_CLASSES}CLASS.csv")
 WEIGHTS = "weights/cxr_reg_weights.best.hdf5"
