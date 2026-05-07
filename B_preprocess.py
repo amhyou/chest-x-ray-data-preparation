@@ -1,11 +1,27 @@
 import os
+
+# Must be set BEFORE TensorFlow is imported
+os.environ["TF_CUDNN_USE_AUTOTUNE"] = "0"
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # Suppress TF info/warning logs
+
 import cv2
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
-from unet import get_unet
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+
+# Enable GPU memory growth to avoid OOM and cuDNN allocation issues
+import tensorflow as tf
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+    print(f"GPU detected: {[g.name for g in gpus]} — memory growth enabled.")
+else:
+    print("No GPU detected. Running on CPU.")
+
+from unet import get_unet
 
 # ─── EXPERIMENT CONFIGURATION ─────────────────────────────
 NUM_CLASSES = 5   # Set to 4 or 5
