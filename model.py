@@ -51,16 +51,16 @@ class VGGSwinHybridNet(nn.Module):
         # ── VGG16-BN Blocks 1–2 ──────────────────────────────────────────
         # features[0:14] → [B, 128, 96, 96] for 384×384 input
         vgg = models.vgg16_bn(weights='IMAGENET1K_V1')
-        self.backbone = vgg.features[:14]
+        self.backbone = vgg.features[:7]   # block 1 only → [B, 64, 192, 192]
 
         # ── Bridge ───────────────────────────────────────────────────────
         # Project to Swin Tiny's embed_dim (96) and pool to 56×56 token grid
-        swin_embed_dim = 96   # embed_dim of swin_tiny_patch4_window7_224
+        swin_embed_dim = 96
         self.bridge = nn.Sequential(
-            nn.Conv2d(128, swin_embed_dim, kernel_size=1, bias=False),
+            nn.Conv2d(64, swin_embed_dim, kernel_size=1, bias=False),  # 64 ch from block 1
             nn.BatchNorm2d(swin_embed_dim),
             nn.GELU(),
-            nn.AdaptiveAvgPool2d((56, 56))   # 96×96 → 56×56 (Swin Tiny native)
+            nn.AdaptiveAvgPool2d((56, 56))   # 192×192 → 56×56 (Swin Tiny native)
         )
 
         # ── Swin-Tiny (pretrained) ────────────────────────────────────────
@@ -89,8 +89,8 @@ class VGGSwinHybridNet(nn.Module):
         )
 
     def forward_features(self, x):
-        # 1. VGG16 Blocks 1–2
-        x = self.backbone(x)                       # [B, 128, 96, 96]
+        # 1. VGG16 Block 1 only
+        x = self.backbone(x)                       # [B, 64, 192, 192]
 
         # 2. Bridge: project channels + pool to Swin Tiny native resolution
         x = self.bridge(x)                         # [B, 96, 56, 56]

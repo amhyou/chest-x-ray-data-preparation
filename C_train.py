@@ -225,6 +225,13 @@ def main():
 
     model = VGGSwinHybridNet(num_classes=NUM_CLASSES).to(DEVICE)
 
+    # torch.compile gives 20-40% speedup via kernel fusion (PyTorch 2.0+)
+    try:
+        model = torch.compile(model, mode='reduce-overhead')
+        print("torch.compile enabled.")
+    except Exception as e:
+        print(f"torch.compile skipped: {e}")
+
     bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     def criterion(inputs, targets):
         smooth = targets * (1 - LABEL_SMOOTHING) + 0.5 * LABEL_SMOOTHING
