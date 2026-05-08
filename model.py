@@ -75,7 +75,6 @@ class VGGSwinHybridNet(nn.Module):
         self.swin_stage2 = swin.layers[2]   # 18 blocks, downsamples 24→12
         self.swin_stage3 = swin.layers[3]   # 2 blocks, no downsampling
         self.swin_norm   = swin.norm        # LayerNorm before pooling
-        self.swin_pool   = nn.AdaptiveAvgPool1d(1)
         self.embed_dim   = swin.num_features   # 1024 for Swin-Base
 
         # Alias kept for C_train.py freeze compatibility
@@ -93,21 +92,21 @@ class VGGSwinHybridNet(nn.Module):
 
     def forward_features(self, x):
         # 1. VGG16 Blocks 1–4
-        x = self.backbone(x)                     # [B, 512, 24, 24]
+        x = self.backbone(x)                       # [B, 512, 24, 24]
 
         # 2. Bridge
-        x = self.bridge(x)                        # [B, 512, 24, 24]
-        B, C, H, W = x.shape
-        x = x.flatten(2).transpose(1, 2)          # [B, 576, 512]
+        x = self.bridge(x)                         # [B, 512, 24, 24]
 
-        # 3. Swin Stages 2 and 3
-        x = self.swin_stage2(x)                   # [B, 144, 1024]
-        x = self.swin_stage3(x)                   # [B, 144, 1024]
-        x = self.swin_norm(x)                     # [B, 144, 1024]
+        # 3. Reshape to [B, H, W, C] — newer timm Swin (>=0.9) uses 4D tensors
+        x = x.permute(0, 2, 3, 1).contiguous()    # [B, 24, 24, 512]
 
-        # 4. Global Average Pool
-        x = self.swin_pool(x.transpose(1, 2))     # [B, 1024, 1]
-        x = x.flatten(1)                           # [B, 1024]
+        # 4. Swin Stages 2 and 3
+        x = self.swin_stage2(x)                    # [B, 12, 12, 1024] after PatchMerging
+        x = self.swin_stage3(x)                    # [B, 12, 12, 1024]
+        x = self.swin_norm(x)                      # [B, 12, 12, 1024]
+
+        # 5. Global Average Pool over spatial dims
+        x = x.mean(dim=(1, 2))                     # [B, 1024]
         return x
 
     def forward(self, x):
