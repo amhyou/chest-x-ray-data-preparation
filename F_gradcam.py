@@ -84,17 +84,12 @@ class SerialGradCAM:
         cnn_hm  = F.relu(cnn_hm)
         cnn_hm  = cnn_hm / (cnn_hm.max() + 1e-8)
 
-        # ── Swin heatmap [B, N, C] → [√N, √N] ──────────────────────────
-        # Average gradient over channels → weight each token
-        token_w  = self.swin_grad.mean(dim=-1).squeeze()          # [N]
-        token_a  = self.swin_act.squeeze()                         # [N, C]
-        swin_hm  = (token_w.unsqueeze(-1) * token_a).sum(-1)      # [N]
+        # ── Swin heatmap [B, H, W, C] → [H, W] ──────────────────────────
+        # In newer timm Swin, output is 4D spatial: [B, H, W, C]
+        token_w  = self.swin_grad.mean(dim=(1, 2), keepdim=True)  # [B, 1, 1, C]
+        swin_hm  = (token_w * self.swin_act).sum(dim=-1).squeeze() # [H, W]
         swin_hm  = F.relu(swin_hm)
         swin_hm  = swin_hm / (swin_hm.max() + 1e-8)
-        # Infer spatial resolution: N = H*W where H=W=√N
-        N = swin_hm.shape[0]
-        side = int(N ** 0.5)
-        swin_hm = swin_hm.reshape(side, side)
 
         return cnn_hm.detach().cpu().numpy(), swin_hm.detach().cpu().numpy()
 
