@@ -1,4 +1,6 @@
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import time
 import argparse
 import torch
@@ -222,6 +224,11 @@ def main():
                               persistent_workers=True, prefetch_factor=3)
 
     model = VGGSwinHybridNet(num_classes=NUM_CLASSES).to(DEVICE)
+
+    # Gradient checkpointing on Swin stages: recomputes activations during
+    # backward pass instead of storing them — saves ~30% VRAM at ~15% speed cost
+    if hasattr(model.swin_model, 'set_grad_checkpointing'):
+        model.swin_model.set_grad_checkpointing(enable=True)
 
     bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     def criterion(inputs, targets):
