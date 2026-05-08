@@ -258,9 +258,8 @@ def main():
         phase_name, epochs, lr, freeze_backbone, freeze_swin = phases[phase_idx]
         print(f"\n>>> {phase_name} (LR={lr})")
 
-        for p in model.backbone.parameters():   p.requires_grad = not freeze_backbone
-        for p in model.swin_stage2.parameters(): p.requires_grad = not freeze_swin
-        for p in model.swin_stage3.parameters(): p.requires_grad = not freeze_swin
+        for p in model.backbone.parameters():    p.requires_grad = not freeze_backbone
+        for p in model.swin_layers.parameters(): p.requires_grad = not freeze_swin
 
         if phase_name == "Phase_2":
             param_groups = [
@@ -268,8 +267,7 @@ def main():
                 {'params': model.se.parameters(),         'lr': lr},
                 {'params': model.bridge.parameters(),     'lr': lr},
                 {'params': model.swin_norm.parameters(),  'lr': lr},
-                {'params': model.swin_stage2.parameters(),'lr': lr * 0.1},
-                {'params': model.swin_stage3.parameters(),'lr': lr * 0.1},
+                {'params': model.swin_layers.parameters(),'lr': lr * 0.1},
                 {'params': model.backbone.parameters(),   'lr': lr * 0.1},
             ]
             valid_groups = [{'params': [p for p in g['params'] if p.requires_grad], 'lr': g['lr']}
@@ -294,10 +292,11 @@ def main():
         for epoch in range(current_start, epochs + 1):
             t0 = time.time()
             model.train()
-            if freeze_backbone: model.backbone.eval()
+            # ALWAYS keep VGG backbone in eval mode to freeze BatchNorm running stats.
+            # Fine-tuning BN stats at this stage causes NaN explosions.
+            model.backbone.eval()
             if freeze_swin:
-                model.swin_stage2.eval()
-                model.swin_stage3.eval()
+                model.swin_layers.eval()
 
             train_loss = 0
             optimizer.zero_grad()
