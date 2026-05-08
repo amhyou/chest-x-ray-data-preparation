@@ -225,11 +225,6 @@ def main():
 
     model = VGGSwinHybridNet(num_classes=NUM_CLASSES).to(DEVICE)
 
-    # Gradient checkpointing on Swin stages: recomputes activations during
-    # backward pass instead of storing them — saves ~30% VRAM at ~15% speed cost
-    if hasattr(model.swin_model, 'set_grad_checkpointing'):
-        model.swin_model.set_grad_checkpointing(enable=True)
-
     bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     def criterion(inputs, targets):
         smooth = targets * (1 - LABEL_SMOOTHING) + 0.5 * LABEL_SMOOTHING
