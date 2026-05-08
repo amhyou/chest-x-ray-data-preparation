@@ -29,9 +29,12 @@ os.makedirs(RESULTS_DIR, exist_ok=True)
 
 print("Scanning metadata to configure classes...")
 _tmp = pd.read_csv(METADATA_PATH, nrows=5)
-TARGET_CLASSES = (['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
-                  if 'Pneumonia' in _tmp.columns
-                  else ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal'])
+if config.NUM_CLASSES == 2:
+    TARGET_CLASSES = ['Effusion', 'Normal']
+elif 'Pneumonia' in _tmp.columns:
+    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
+else:
+    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
 NUM_CLASSES = len(TARGET_CLASSES)
 print(f"-> {NUM_CLASSES}-Class Dataset: {TARGET_CLASSES}")
 
@@ -56,7 +59,7 @@ class ChestXRayDataset(Dataset):
 # ─── PLOTS ───────────────────────────────────────────────────────────────────
 def plot_confusion_matrix(y_true, y_pred):
     mcm = multilabel_confusion_matrix(y_true, y_pred)
-    cols = 3 if NUM_CLASSES <= 6 else 4
+    cols = 2 if NUM_CLASSES in (2, 4) else min(3, NUM_CLASSES)
     rows = (NUM_CLASSES + cols - 1) // cols
     fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 5*rows))
     axes = axes.ravel()
@@ -101,7 +104,7 @@ def plot_pr_curves(y_true, y_probs):
     plt.savefig(f'{RESULTS_DIR}/pr_curves.png'); plt.close()
 
 def plot_calibration_curves(y_true, y_probs):
-    cols = 3 if NUM_CLASSES <= 6 else 4
+    cols = 2 if NUM_CLASSES in (2, 4) else min(3, NUM_CLASSES)
     rows = (NUM_CLASSES + cols - 1) // cols
     fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 5*rows))
     axes = axes.ravel()
@@ -119,6 +122,18 @@ def plot_calibration_curves(y_true, y_probs):
 # ─── MAIN ────────────────────────────────────────────────────────────────────
 def main():
     full_df = pd.read_csv(METADATA_PATH)
+
+    if config.NUM_CLASSES == 2:
+        print("\nFiltering dataset for pure Binary Classification (Normal vs Effusion)...")
+        all_diseases = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
+        if 'Pneumonia' in full_df.columns:
+            all_diseases.append('Pneumonia')
+        full_df['disease_sum'] = full_df[all_diseases].sum(axis=1)
+        mask = (full_df['disease_sum'] == 1) & ((full_df['Normal'] == 1) | (full_df['Effusion'] == 1))
+        full_df = full_df[mask].copy()
+        full_df.drop(columns=['disease_sum'], inplace=True)
+        print(f"Filtered dataset size: {len(full_df)} images.")
+
     unique_df = full_df.drop_duplicates(subset='Image_ID').copy()
 
     # Reproduce the EXACT same Fold 0 test split as C_train.py

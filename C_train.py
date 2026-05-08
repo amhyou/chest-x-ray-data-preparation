@@ -42,13 +42,14 @@ torch.backends.cudnn.benchmark = True   # auto-tune convolution algorithms
 # Auto-detect classes
 print("Scanning metadata to configure classes...")
 _tmp = pd.read_csv(METADATA_PATH, nrows=5)
-if 'Pneumonia' in _tmp.columns:
+if config.NUM_CLASSES == 2:
+    TARGET_CLASSES = ['Effusion', 'Normal']
+elif 'Pneumonia' in _tmp.columns:
     TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
-    print("-> Detected 5-Class Dataset")
 else:
     TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
-    print("-> Detected 4-Class Dataset")
 NUM_CLASSES = len(TARGET_CLASSES)
+print(f"-> Detected {NUM_CLASSES}-Class Dataset: {TARGET_CLASSES}")
 
 
 # ─── DATASET ─────────────────────────────────────────────────────────────────
@@ -154,6 +155,23 @@ def main():
     os.makedirs(config.RESULTS_DIR, exist_ok=True)
 
     full_df = pd.read_csv(METADATA_PATH)
+
+    # Filter for Binary Classification if NUM_CLASSES == 2
+    if config.NUM_CLASSES == 2:
+        print("\nFiltering dataset for pure Binary Classification (Normal vs Effusion)...")
+        # Keep rows where only Effusion is 1, OR only Normal is 1, and everything else is 0
+        all_diseases = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
+        if 'Pneumonia' in full_df.columns:
+            all_diseases.append('Pneumonia')
+
+        # Calculate sum of all disease labels
+        full_df['disease_sum'] = full_df[all_diseases].sum(axis=1)
+
+        # Condition: Exactly 1 disease is active, AND it's either Normal or Effusion
+        mask = (full_df['disease_sum'] == 1) & ((full_df['Normal'] == 1) | (full_df['Effusion'] == 1))
+        full_df = full_df[mask].copy()
+        full_df.drop(columns=['disease_sum'], inplace=True)
+        print(f"Filtered dataset size: {len(full_df)} images.")
 
     # Extract patient group from Image_ID to prevent data leakage
     def get_patient_id(img_id):

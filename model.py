@@ -39,10 +39,10 @@ class VGGSwinHybridNet(nn.Module):
              ↓  [B, 768]
         SE Block  →  MLP Head  →  [B, num_classes]
 
-    Swin Tiny is 3× smaller and faster than Swin Base.
+    Swin Base is larger and more powerful.
     VGG handles the full 384×384 local feature extraction;
-    the bridge downsamples to the 56×56 token grid that Swin Tiny
-    (window_size=7) was designed for.
+    the bridge maintains the 96×96 token grid that Swin Base
+    (patch_size=4) expects for 384x384 inputs.
     """
 
     def __init__(self, num_classes=4):
@@ -51,28 +51,29 @@ class VGGSwinHybridNet(nn.Module):
         # ── VGG16-BN Blocks 1–2 ──────────────────────────────────────────
         # features[0:14] → [B, 128, 96, 96] for 384×384 input
         vgg = models.vgg16_bn(weights='IMAGENET1K_V1')
-        self.backbone = vgg.features[:7]   # block 1 only → [B, 64, 192, 192]
+        self.backbone = vgg.features[:14]   # blocks 1-2
 
         # ── Bridge ───────────────────────────────────────────────────────
-        # Project to Swin Tiny's embed_dim (96) and pool to 56×56 token grid
-        swin_embed_dim = 96
+        # Project to Swin Base's embed_dim (128)
+        swin_embed_dim = 128   # embed_dim of swin_base_patch4_window12_384
         self.bridge = nn.Sequential(
-            nn.Conv2d(64, swin_embed_dim, kernel_size=1, bias=False),  # 64 ch from block 1
+            nn.Conv2d(128, swin_embed_dim, kernel_size=1, bias=False),
             nn.BatchNorm2d(swin_embed_dim),
-            nn.GELU(),
-            nn.AdaptiveAvgPool2d((56, 56))   # 192×192 → 56×56 (Swin Tiny native)
+            nn.GELU()
+            # No pooling needed: 384x384 input -> VGG Blocks 1-2 -> 96x96 output
+            # This perfectly matches Swin Base's native token grid for 384x384.
         )
 
-        # ── Swin-Tiny (pretrained) ────────────────────────────────────────
+        # ── Swin-Base (pretrained) ────────────────────────────────────────
         swin = timm.create_model(
-            'swin_tiny_patch4_window7_224',
+            'swin_base_patch4_window12_384',
             pretrained=True,
             num_classes=0,
             drop_path_rate=0.2
         )
         self.swin_layers = swin.layers      # 4 stages as ModuleList
         self.swin_norm   = swin.norm        # final LayerNorm
-        self.embed_dim   = swin.num_features  # 768 for Swin-Tiny
+        self.embed_dim   = swin.num_features  # 1024 for Swin-Base
 
         # Aliases for C_train.py freeze-phase compatibility
         self.swin_model  = swin
@@ -82,30 +83,30 @@ class VGGSwinHybridNet(nn.Module):
         # ── SE Block + Classification Head ───────────────────────────────
         self.se = SEBlock(self.embed_dim)
         self.head = nn.Sequential(
-            nn.Linear(self.embed_dim, 256),
+            nn.Linear(self.embed_dim, 512),
             nn.GELU(),
             nn.Dropout(p=0.5),
-            nn.Linear(256, num_classes)
+            nn.Linear(512, num_classes)
         )
 
     def forward_features(self, x):
-        # 1. VGG16 Block 1 only
-        x = self.backbone(x)                       # [B, 64, 192, 192]
+        # 1. VGG16 Blocks 1-2
+        x = self.backbone(x)                       # [B, 128, 96, 96]
 
-        # 2. Bridge: project channels + pool to Swin Tiny native resolution
-        x = self.bridge(x)                         # [B, 96, 56, 56]
+        # 2. Bridge
+        x = self.bridge(x)                         # [B, 128, 96, 96]
 
         # 3. [B, C, H, W] → [B, H, W, C]  (timm Swin 4D spatial format)
-        x = x.permute(0, 2, 3, 1).contiguous()    # [B, 56, 56, 96]
+        x = x.permute(0, 2, 3, 1).contiguous()    # [B, 96, 96, 128]
 
-        # 4. All Swin Tiny stages
+        # 4. All Swin Base stages
         for layer in self.swin_layers:
             x = layer(x)
-        # After all stages: [B, 7, 7, 768]
+        # After all stages: [B, 12, 12, 1024]
 
         # 5. Norm + Global Average Pool
-        x = self.swin_norm(x)                      # [B, 7, 7, 768]
-        x = x.mean(dim=(1, 2))                     # [B, 768]
+        x = self.swin_norm(x)                      # [B, 12, 12, 1024]
+        x = x.mean(dim=(1, 2))                     # [B, 1024]
         return x
 
     def forward(self, x):

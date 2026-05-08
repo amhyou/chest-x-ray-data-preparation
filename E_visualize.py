@@ -19,16 +19,18 @@ except FileNotFoundError:
     exit()
 
 total_epochs = len(df)
-phase_break = df[df['Phase'] == 'Warmup'].shape[0] if 'Warmup' in df['Phase'].values else 0
+phase1_break = df[df['Phase'] == 'Warmup'].shape[0] if 'Warmup' in df['Phase'].values else 0
+phase2_break = phase1_break + df[df['Phase'] == 'Phase_1'].shape[0] if 'Phase_1' in df['Phase'].values else 0
 best_epoch = df['Val_f1_macro'].idxmax() + 1 if 'Val_f1_macro' in df.columns else None
 
 def save_thesis_plot(title, filename, y_label="Metric Value", show_best=False):
     sns.set_theme(style="whitegrid", context="paper")
     plt.title(title, fontsize=14, fontweight='bold')
     
-    if phase_break > 0:
-        plt.axvline(x=phase_break, color='gray', linestyle='--', alpha=0.5, label='Phase Change')
-        
+    if phase1_break > 0:
+        plt.axvline(x=phase1_break, color='gray', linestyle='--', alpha=0.5, label='Phase 1 Start')
+    if phase2_break > phase1_break:
+        plt.axvline(x=phase2_break, color='purple', linestyle='--', alpha=0.5, label='Phase 2 Start')
     if show_best and best_epoch is not None:
         plt.axvline(x=best_epoch, color='green', linestyle='-', alpha=0.7, label=f'Best Epoch ({best_epoch})')
 
