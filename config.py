@@ -23,8 +23,8 @@ RESULTS_DIR = "results"
 LOG_FILE = os.path.join(RESULTS_DIR, "training_log.csv")
 
 # ─── TRAINING HYPERPARAMETERS ─────────────────────────────
-BATCH_SIZE = 16
-ACCUMULATION_STEPS = 4          # Effective batch = 16 * 4 = 64
+BATCH_SIZE = 32
+ACCUMULATION_STEPS = 2          # Effective batch = 32 * 2 = 64
 LABEL_SMOOTHING = 0.1
 MIXUP_ALPHA = 0.4
 EARLY_STOP_PATIENCE = 7

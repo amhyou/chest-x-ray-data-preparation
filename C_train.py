@@ -32,6 +32,11 @@ IMG_SIZE           = config.IMG_SIZE
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Enable TensorFloat-32 — free ~2-3x speedup on Ampere/Blackwell with negligible precision loss
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+torch.backends.cudnn.benchmark = True   # auto-tune convolution algorithms
+
 # Auto-detect classes
 print("Scanning metadata to configure classes...")
 _tmp = pd.read_csv(METADATA_PATH, nrows=5)
@@ -206,13 +211,15 @@ def main():
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
-    NUM_WORKERS = min(8, os.cpu_count() or 4)
+    NUM_WORKERS = min(os.cpu_count() or 4, 12)
     train_loader = DataLoader(ChestXRayDataset(train_df, DATA_DIR, train_trans),
                               batch_size=BATCH_SIZE, shuffle=True,
-                              num_workers=NUM_WORKERS, pin_memory=True)
+                              num_workers=NUM_WORKERS, pin_memory=True,
+                              persistent_workers=True, prefetch_factor=3)
     val_loader   = DataLoader(ChestXRayDataset(val_df, DATA_DIR, val_trans),
                               batch_size=BATCH_SIZE,
-                              num_workers=NUM_WORKERS, pin_memory=True)
+                              num_workers=NUM_WORKERS, pin_memory=True,
+                              persistent_workers=True, prefetch_factor=3)
 
     model = VGGSwinHybridNet(num_classes=NUM_CLASSES).to(DEVICE)
 
