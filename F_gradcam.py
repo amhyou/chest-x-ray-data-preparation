@@ -24,11 +24,14 @@ NUM_IMAGES_PER_CLASS = 5
 
 print("Scanning metadata to configure classes...")
 _tmp = pd.read_csv(METADATA_PATH, nrows=5)
-TARGET_CLASSES = (['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
-                  if 'Pneumonia' in _tmp.columns
-                  else ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal'])
+if config.NUM_CLASSES == 2:
+    TARGET_CLASSES = ['Effusion', 'Normal']
+elif 'Pneumonia' in _tmp.columns:
+    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
+else:
+    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
 NUM_CLASSES = len(TARGET_CLASSES)
-print(f"-> {NUM_CLASSES}-Class Dataset")
+print(f"-> {NUM_CLASSES}-Class Dataset: {TARGET_CLASSES}")
 
 
 def get_image_selection():
