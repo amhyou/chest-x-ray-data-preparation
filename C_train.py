@@ -242,6 +242,9 @@ def main():
                               persistent_workers=True, prefetch_factor=3)
 
     model = VGGSwinHybridNet(num_classes=NUM_CLASSES).to(DEVICE)
+    if hasattr(model.swin_model, 'set_grad_checkpointing'):
+        model.swin_model.set_grad_checkpointing(enable=True)
+
 
     bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
     def criterion(inputs, targets):

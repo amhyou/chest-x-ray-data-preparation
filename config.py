@@ -23,8 +23,8 @@ RESULTS_DIR = "results"
 LOG_FILE = os.path.join(RESULTS_DIR, "training_log.csv")
 
 # ─── TRAINING HYPERPARAMETERS ─────────────────────────────
-BATCH_SIZE = 16
-ACCUMULATION_STEPS = 4          # Effective batch = 64 (Swin-Base requires smaller batch)
+BATCH_SIZE = 8
+ACCUMULATION_STEPS = 8          # Effective batch = 64 (Fits Swin-Base on 12GB VRAM)
 LABEL_SMOOTHING = 0.1
 MIXUP_ALPHA = 0.4
 EARLY_STOP_PATIENCE = 7
