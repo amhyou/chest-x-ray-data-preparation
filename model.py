@@ -45,7 +45,7 @@ class VGGSwinHybridNet(nn.Module):
     (patch_size=4) expects for 384x384 inputs.
     """
 
-    def __init__(self, num_classes=4):
+    def __init__(self, num_classes=4, swin_model_name='swin_base_patch4_window12_384', drop_path_rate=0.2, head_dropout=0.5):
         super().__init__()
 
         # ── VGG16-BN Blocks 1–2 ──────────────────────────────────────────
@@ -54,8 +54,8 @@ class VGGSwinHybridNet(nn.Module):
         self.backbone = vgg.features[:14]   # blocks 1-2
 
         # ── Bridge ───────────────────────────────────────────────────────
-        # Project to Swin Base's embed_dim (128)
-        swin_embed_dim = 128   # embed_dim of swin_base_patch4_window12_384
+        # Project to Swin's embed_dim (128 for base, 96 for tiny)
+        swin_embed_dim = 96 if 'tiny' in swin_model_name else 128
         self.bridge = nn.Sequential(
             nn.Conv2d(128, swin_embed_dim, kernel_size=1, bias=False),
             nn.BatchNorm2d(swin_embed_dim),
@@ -66,10 +66,10 @@ class VGGSwinHybridNet(nn.Module):
 
         # ── Swin-Base (pretrained) ────────────────────────────────────────
         swin = timm.create_model(
-            'swin_base_patch4_window12_384',
+            swin_model_name,
             pretrained=True,
             num_classes=0,
-            drop_path_rate=0.2
+            drop_path_rate=drop_path_rate
         )
         self.swin_layers = swin.layers      # 4 stages as ModuleList
         self.swin_norm   = swin.norm        # final LayerNorm
@@ -85,7 +85,7 @@ class VGGSwinHybridNet(nn.Module):
         self.head = nn.Sequential(
             nn.Linear(self.embed_dim, 512),
             nn.GELU(),
-            nn.Dropout(p=0.5),
+            nn.Dropout(p=head_dropout),
             nn.Linear(512, num_classes)
         )
 

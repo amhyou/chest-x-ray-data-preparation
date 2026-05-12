@@ -2,6 +2,7 @@ import os
 
 # ─── EXPERIMENT CONFIGURATION ─────────────────────────────
 NUM_CLASSES = 2   # Binary: Normal vs Effusion
+NUM_CLASSES = 4   # Multi-class: Atelectasis, Cardiomegaly, Effusion, Normal
 
 # ─── PATHS ────────────────────────────────────────────────
 # Change these when switching environments (local / Vast.ai / Kaggle)
