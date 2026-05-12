@@ -9,6 +9,7 @@ import numpy as np
 from torch.utils.data import DataLoader
 from torchvision import transforms
 from sklearn.model_selection import GroupShuffleSplit
+from tqdm import tqdm
 
 import config
 from model import VGGSwinHybridNet
@@ -131,7 +132,10 @@ def objective(trial):
     best_auc = 0.0
     for epoch in range(1, EPOCHS_PER_TRIAL + 1):
         model.train()
-        for images, labels in train_loader:
+        
+        train_loss = 0.0
+        pbar = tqdm(train_loader, desc=f"[Trial {trial.number}] Epoch {epoch}/{EPOCHS_PER_TRIAL}", leave=False)
+        for images, labels in pbar:
             images, labels = images.to(DEVICE), labels.to(DEVICE)
             images, labels = mixup_batch(images, labels, alpha=mixup_alpha)
 
@@ -142,11 +146,16 @@ def objective(trial):
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
+            
+            train_loss += loss.item()
+            pbar.set_postfix({'loss': f"{train_loss/(pbar.n+1):.4f}"})
 
         # Evaluate
         val_metrics = evaluate(model, val_loader, criterion)
         current_auc = val_metrics['auc_macro']
         best_auc = max(best_auc, current_auc)
+        
+        print(f"  -> Trial {trial.number} | Epoch {epoch}/{EPOCHS_PER_TRIAL} | Val AUC: {current_auc:.4f} (Best: {best_auc:.4f})")
         
         scheduler.step()
         
