@@ -170,10 +170,18 @@ def objective(trial):
 if __name__ == "__main__":
     print(f"Starting Optuna HPO with Proxy Model: {PROXY_MODEL} ({PROXY_IMG_SIZE}x{PROXY_IMG_SIZE})")
     
-    # Create study using MedianPruner
-    # It stops unpromising trials early (if they are worse than the median of previous trials at the same epoch)
+    # Create study using MedianPruner and SQLite database for persistence
     pruner = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=2)
-    study = optuna.create_study(direction="maximize", pruner=pruner)
+    os.makedirs(config.RESULTS_DIR, exist_ok=True)
+    db_path = os.path.join(config.RESULTS_DIR, "optuna_study.db")
+    
+    study = optuna.create_study(
+        study_name="vgg_swin_hpo",
+        direction="maximize", 
+        storage=f"sqlite:///{db_path}",
+        load_if_exists=True,
+        pruner=pruner
+    )
     
     try:
         study.optimize(objective, n_trials=N_TRIALS)
@@ -194,3 +202,25 @@ if __name__ == "__main__":
     df = study.trials_dataframe()
     df.to_csv(f"{config.RESULTS_DIR}/hpo_optuna_results.csv", index=False)
     print(f"Full results saved to {config.RESULTS_DIR}/hpo_optuna_results.csv")
+    
+    # ─── GENERATE VISUALIZATIONS FOR THESIS ──────────────────────────────────
+    print("\nGenerating interactive HTML plots for your thesis...")
+    try:
+        import optuna.visualization as vis
+        
+        # Generate the plots
+        fig_history = vis.plot_optimization_history(study)
+        fig_importances = vis.plot_param_importances(study)
+        fig_parallel = vis.plot_parallel_coordinate(study)
+        fig_slice = vis.plot_slice(study)
+        
+        # Save them as interactive HTML files
+        fig_history.write_html(f"{config.RESULTS_DIR}/hpo_optimization_history.html")
+        fig_importances.write_html(f"{config.RESULTS_DIR}/hpo_param_importances.html")
+        fig_parallel.write_html(f"{config.RESULTS_DIR}/hpo_parallel_coordinate.html")
+        fig_slice.write_html(f"{config.RESULTS_DIR}/hpo_slice.html")
+        
+        print(f"✅ Successfully saved 4 interactive visualization plots to {config.RESULTS_DIR}/")
+    except ImportError:
+        print("⚠️ Plotly is not installed. To generate thesis plots, run: pip install plotly")
+        print("After installing, you can generate the plots anytime from the saved SQLite database.")
