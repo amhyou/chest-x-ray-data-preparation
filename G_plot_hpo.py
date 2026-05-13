@@ -16,7 +16,7 @@ def generate_thesis_plots():
     try:
         # Load the saved study from the database
         study = optuna.load_study(
-            study_name="vgg_swin_hpo", 
+            study_name="vgg_swin_hpo_v2", 
             storage=f"sqlite:///{db_path}"
         )
         

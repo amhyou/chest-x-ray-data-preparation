@@ -18,9 +18,9 @@ from C_train import ChestXRayDataset, mixup_batch, evaluate, TARGET_CLASSES, NUM
 # ─── HPO CONFIG ──────────────────────────────────────────────────────────────
 PROXY_MODEL = 'swin_tiny_patch4_window7_224'
 PROXY_IMG_SIZE = 224
-DATA_SUBSET_FRAC = 0.20 # Use 20% of data to speed up epochs
+DATA_SUBSET_FRAC = 0.15 # Use 20% of data to speed up epochs
 EPOCHS_PER_TRIAL = 10   # Only run 10 epochs max to evaluate a hyperparameter set
-N_TRIALS = 30           # Total number of configurations to test
+N_TRIALS = 100           # Total number of configurations to test
 
 DATA_DIR = config.ROI_IMAGE_DIR
 METADATA_PATH = config.METADATA_PATH
@@ -95,6 +95,20 @@ def prepare_hpo_dataloaders(batch_size):
     return train_loader, val_loader, pos_weight
 
 
+# ─── CUSTOM LOSS ─────────────────────────────────────────────────────────────
+class FocalLoss(nn.Module):
+    def __init__(self, pos_weight=None, gamma=2.0):
+        super().__init__()
+        self.bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight, reduction='none')
+        self.gamma = gamma
+
+    def forward(self, inputs, targets):
+        bce_loss = self.bce(inputs, targets)
+        pt = torch.exp(-bce_loss)
+        focal_loss = ((1 - pt) ** self.gamma) * bce_loss
+        return focal_loss.mean()
+
+
 # ─── OPTUNA OBJECTIVE ────────────────────────────────────────────────────────
 def objective(trial):
     # 1. Suggest Hyperparameters
@@ -104,6 +118,11 @@ def objective(trial):
     label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.2)
     head_dropout    = trial.suggest_float("head_dropout", 0.2, 0.6)
     drop_path_rate  = trial.suggest_float("drop_path_rate", 0.1, 0.3)
+    
+    # Categorical structural choices
+    optimizer_name  = trial.suggest_categorical("optimizer", ["Adam", "AdamW", "SGD", "RMSprop"])
+    loss_name       = trial.suggest_categorical("loss", ["BCE", "Focal"])
+    scheduler_name  = trial.suggest_categorical("scheduler", ["CosineAnnealing", "StepLR"])
     
     # 224x224 takes way less memory, so we can use a larger batch size for faster epochs.
     batch_size = 64
@@ -119,13 +138,29 @@ def objective(trial):
         head_dropout=head_dropout
     ).to(DEVICE)
     
-    bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    if loss_name == "BCE":
+        base_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    else:
+        base_criterion = FocalLoss(pos_weight=pos_weight, gamma=2.0)
+        
     def criterion(inputs, targets):
         smooth = targets * (1 - label_smoothing) + 0.5 * label_smoothing
-        return bce(inputs, smooth)
+        return base_criterion(inputs, smooth)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS_PER_TRIAL, T_mult=1)
+    if optimizer_name == "Adam":
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    elif optimizer_name == "AdamW":
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+    elif optimizer_name == "SGD":
+        optimizer = torch.optim.SGD(model.parameters(), lr=lr, weight_decay=weight_decay, momentum=0.9)
+    else:
+        optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    if scheduler_name == "CosineAnnealing":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS_PER_TRIAL, T_mult=1)
+    else:
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.5)
+        
     scaler = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
 
     # 4. Fast Training Loop (No phase freezing to test pure capacity fast)
@@ -176,7 +211,7 @@ if __name__ == "__main__":
     db_path = os.path.join(config.RESULTS_DIR, "optuna_study.db")
     
     study = optuna.create_study(
-        study_name="vgg_swin_hpo",
+        study_name="vgg_swin_hpo_v2",
         direction="maximize", 
         storage=f"sqlite:///{db_path}",
         load_if_exists=True,
