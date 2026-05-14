@@ -1,20 +1,25 @@
 import os
 
 # ─── EXPERIMENT CONFIGURATION ─────────────────────────────
-NUM_CLASSES = 2   # Binary: Normal vs Effusion
-NUM_CLASSES = 4   # Multi-class: Atelectasis, Cardiomegaly, Effusion, Normal
+# Priority order: ['Effusion', 'Normal', 'Atelectasis', 'Cardiomegaly', 'Pneumonia']
+# Example: NUM_CLASSES = 4 gives ['Effusion', 'Normal', 'Atelectasis', 'Cardiomegaly']
+NUM_CLASSES = 4
+MASTER_CLASSES = ['Effusion', 'Normal', 'Atelectasis', 'Cardiomegaly', 'Pneumonia']
+TARGET_CLASSES = MASTER_CLASSES[:NUM_CLASSES]
+
+IMG_SIZE = 224
 
 # ─── PATHS ────────────────────────────────────────────────
-# Change these when switching environments (local / Vast.ai / Kaggle)
+# Standardized zip extraction paths
+RAW_IMAGE_DIR = f"raw_{IMG_SIZE}"
+ROI_IMAGE_DIR = f"roi_{IMG_SIZE}"
 
-# Images the model was TRAINED on (ROI output from B_preprocess.py)
-ROI_IMAGE_DIR = "data_roi_4class"
+# Metadata is extracted outside the image folders
+METADATA_PATH_RAW = os.path.join("metadata", "DATA_RAW.csv")
+METADATA_PATH_ROI = os.path.join("metadata", "DATA_ROI.csv")
 
-# Original raw 384px images — used ONLY for Grad-CAM overlays
-RAW_IMAGE_DIR = "data_384_4class/images"
-
-# ROI metadata CSV (output of B_preprocess.py)
-METADATA_PATH = os.path.join("metadata", "DATA_ROI_4CLASS.csv")
+# Active metadata (used by C_train, D_test, F_gradcam)
+METADATA_PATH = METADATA_PATH_ROI
 
 # Model checkpoints
 CHECKPOINT_DIR = "weights"
@@ -23,11 +28,16 @@ CHECKPOINT_DIR = "weights"
 RESULTS_DIR = "results"
 LOG_FILE = os.path.join(RESULTS_DIR, "training_log.csv")
 
-# ─── TRAINING HYPERPARAMETERS ─────────────────────────────
+# ─── TRAINING HYPERPARAMETERS (Optimized via Optuna) ──────
 BATCH_SIZE = 8
-ACCUMULATION_STEPS = 8          # Effective batch = 64 (Fits Swin-Base on 12GB VRAM)
-LABEL_SMOOTHING = 0.1
-MIXUP_ALPHA = 0.4
+ACCUMULATION_STEPS = 8          # Effective batch = 64
 EARLY_STOP_PATIENCE = 7
 MAX_GRAD_NORM = 1.0
-IMG_SIZE = 384
+
+# Best Optuna parameters
+LR = 6.096032430708316e-05
+WEIGHT_DECAY = 0.0002595596394410636
+MIXUP_ALPHA = 0.1708137281279795
+LABEL_SMOOTHING = 0.16632690663805205
+HEAD_DROPOUT = 0.25281335833933566
+DROP_PATH_RATE = 0.17020677260817427

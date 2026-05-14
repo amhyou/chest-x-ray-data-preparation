@@ -27,15 +27,8 @@ N_BOOTSTRAP = 1000
 
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
-print("Scanning metadata to configure classes...")
-_tmp = pd.read_csv(METADATA_PATH, nrows=5)
-if config.NUM_CLASSES == 2:
-    TARGET_CLASSES = ['Effusion', 'Normal']
-elif 'Pneumonia' in _tmp.columns:
-    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
-else:
-    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
-NUM_CLASSES = len(TARGET_CLASSES)
+TARGET_CLASSES = config.TARGET_CLASSES
+NUM_CLASSES = config.NUM_CLASSES
 print(f"-> {NUM_CLASSES}-Class Dataset: {TARGET_CLASSES}")
 
 
@@ -206,7 +199,11 @@ def main():
     # TTA + ensemble
     all_probs_ensemble = []
     for m_idx, model_path in enumerate(model_paths):
-        model = VGGSwinHybridNet(num_classes=NUM_CLASSES).to(DEVICE)
+        model = VGGSwinHybridNet(
+            num_classes=NUM_CLASSES,
+            drop_path_rate=config.DROP_PATH_RATE,
+            head_dropout=config.HEAD_DROPOUT
+        ).to(DEVICE)
         model.load_state_dict(torch.load(model_path, map_location=DEVICE))
         model.eval()
         print(f"  Model {m_idx+1}/{len(model_paths)}: {os.path.basename(model_path)}")

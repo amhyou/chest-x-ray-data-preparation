@@ -39,17 +39,9 @@ torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 torch.backends.cudnn.benchmark = True   # auto-tune convolution algorithms
 
-# Auto-detect classes
-print("Scanning metadata to configure classes...")
-_tmp = pd.read_csv(METADATA_PATH, nrows=5)
-if config.NUM_CLASSES == 2:
-    TARGET_CLASSES = ['Effusion', 'Normal']
-elif 'Pneumonia' in _tmp.columns:
-    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
-else:
-    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
-NUM_CLASSES = len(TARGET_CLASSES)
-print(f"-> Detected {NUM_CLASSES}-Class Dataset: {TARGET_CLASSES}")
+TARGET_CLASSES = config.TARGET_CLASSES
+NUM_CLASSES = config.NUM_CLASSES
+print(f"-> Using {NUM_CLASSES}-Class Dataset: {TARGET_CLASSES}")
 
 
 # ─── DATASET ─────────────────────────────────────────────────────────────────
@@ -241,7 +233,11 @@ def main():
                               num_workers=NUM_WORKERS, pin_memory=True,
                               persistent_workers=True, prefetch_factor=3)
 
-    model = VGGSwinHybridNet(num_classes=NUM_CLASSES).to(DEVICE)
+    model = VGGSwinHybridNet(
+        num_classes=NUM_CLASSES, 
+        drop_path_rate=config.DROP_PATH_RATE, 
+        head_dropout=config.HEAD_DROPOUT
+    ).to(DEVICE)
     if hasattr(model.swin_model, 'set_grad_checkpointing'):
         model.swin_model.set_grad_checkpointing(enable=True)
 
@@ -254,8 +250,8 @@ def main():
     # Phase schedule: (name, epochs, lr, freeze_backbone, freeze_swin)
     phases = [
         ("Warmup",  5,  1e-3, True,  True),
-        ("Phase_1", 20, 1e-4, True,  False),
-        ("Phase_2", 15, 1e-5, False, False),
+        ("Phase_1", 20, config.LR, True,  False),
+        ("Phase_2", 15, config.LR, False, False),
     ]
 
     best_val_auc = 0.0
@@ -293,11 +289,11 @@ def main():
             ]
             valid_groups = [{'params': [p for p in g['params'] if p.requires_grad], 'lr': g['lr']}
                             for g in param_groups]
-            optimizer = torch.optim.AdamW(valid_groups, weight_decay=1e-2)
+            optimizer = torch.optim.AdamW(valid_groups, weight_decay=config.WEIGHT_DECAY)
         else:
             optimizer = torch.optim.AdamW(
                 filter(lambda p: p.requires_grad, model.parameters()),
-                lr=lr, weight_decay=1e-2
+                lr=lr, weight_decay=config.WEIGHT_DECAY
             )
 
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5, T_mult=2)

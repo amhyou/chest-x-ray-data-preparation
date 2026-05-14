@@ -4,24 +4,18 @@ import pandas as pd
 import numpy as np
 from concurrent.futures import ProcessPoolExecutor
 from tqdm import tqdm
+import config
 
 # ─── EXPERIMENT CONFIGURATION ─────────────────────────────
-NUM_CLASSES = 5   # Set to 4 (Atelectasis, Cardiomegaly, Effusion, Normal)
-                  # or  5 (+ Pneumonia)
+NUM_CLASSES = config.NUM_CLASSES
+TARGET_CLASSES = config.TARGET_CLASSES
 
-TARGET_SIZE = (384, 384)
+TARGET_SIZE = (config.IMG_SIZE, config.IMG_SIZE)
 NUM_WORKERS = os.cpu_count() or 4
 
-if NUM_CLASSES == 5:
-    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
-    OUTPUT_DIR = "data_384_5class"
-    MASTER_CSV = "master_384_5class_labels.csv"
-else:
-    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
-    OUTPUT_DIR = "data_384_4class"
-    MASTER_CSV = "master_384_4class_labels.csv"
-
-OUTPUT_IMG_DIR = os.path.join(OUTPUT_DIR, "images")
+OUTPUT_DIR = config.RAW_IMAGE_DIR
+MASTER_CSV_PATH = config.METADATA_PATH_RAW
+OUTPUT_IMG_DIR = OUTPUT_DIR
 
 # Paths to the root downloaded folders
 RAW_NIH_DIR = "raw_nih"
@@ -143,14 +137,9 @@ def prepare_nih():
         record = {
             'Image_ID': f"nih_{img_id}",
             'Dataset': 'NIH',
-            'Atelectasis':  1 if 'Atelectasis'  in labels else 0,
-            'Cardiomegaly': 1 if 'Cardiomegaly' in labels else 0,
-            'Effusion':     1 if 'Effusion'      in labels else 0,
-            'Normal':       1 if 'Normal'        in labels else 0,
         }
-        
-        if NUM_CLASSES == 5:
-            record['Pneumonia'] = 1 if 'Pneumonia' in labels else 0
+        for c in TARGET_CLASSES:
+            record[c] = 1 if c in labels else 0
             
         processed_records.append(record)
 
@@ -189,57 +178,48 @@ def prepare_chexpert():
     skipped_missing = 0
 
     for _, row in df.iterrows():
-        raw_at = row.get('Atelectasis', 0)
-        raw_cd = row.get('Cardiomegaly', 0)
-        raw_ef = row.get('Pleural Effusion', 0)
-        raw_nm = row.get('No Finding', 0)
+        col_map = {
+            'Atelectasis': 'Atelectasis',
+            'Cardiomegaly': 'Cardiomegaly',
+            'Effusion': 'Pleural Effusion',
+            'Normal': 'No Finding',
+            'Pneumonia': 'Pneumonia'
+        }
+        
+        drop = False
+        has_target = False
+        record = {'Dataset': 'CheXpert'}
+        
+        for cls in TARGET_CLASSES:
+            chex_col = col_map[cls]
+            val = row.get(chex_col, 0)
+            if val == -1:
+                drop = True
+                break
+            final_val = 1 if val == 1 else 0
+            record[cls] = final_val
+            if final_val == 1:
+                has_target = True
 
-        # STRICT RULE: Drop image if ANY target class is Uncertain (-1)
-        if raw_at == -1 or raw_cd == -1 or raw_ef == -1 or raw_nm == -1:
+        if drop or not has_target:
             continue
             
-        if NUM_CLASSES == 5:
-            raw_pn = row.get('Pneumonia', 0)
-            if raw_pn == -1:
-                continue
+        # Only keep Frontal views (AP/PA), ignore Lateral — case-insensitive!
+        if 'frontal' not in str(row['Path']).lower():
+            continue
 
-        at = 1 if raw_at == 1 else 0
-        cd = 1 if raw_cd == 1 else 0
-        ef = 1 if raw_ef == 1 else 0
-        nm = 1 if raw_nm == 1 else 0
+        # Multi-batch path resolution
+        src_path = resolve_chexpert_path(batch_dirs, row['Path'])
+        if src_path is None:
+            skipped_missing += 1
+            continue
+
+        safe_filename = 'chexpert_' + row['Path'].replace('CheXpert-v1.0/', '').replace('/', '_')
+        record['Image_ID'] = safe_filename
         
-        has_target = (at == 1 or cd == 1 or ef == 1 or nm == 1)
-        if NUM_CLASSES == 5:
-            pn = 1 if raw_pn == 1 else 0
-            has_target = has_target or (pn == 1)
-
-        if has_target:
-            # Only keep Frontal views (AP/PA), ignore Lateral — case-insensitive!
-            if 'frontal' not in str(row['Path']).lower():
-                continue
-
-            # Multi-batch path resolution
-            src_path = resolve_chexpert_path(batch_dirs, row['Path'])
-            if src_path is None:
-                skipped_missing += 1
-                continue
-
-            safe_filename = 'chexpert_' + row['Path'].replace('CheXpert-v1.0/', '').replace('/', '_')
-
-            record = {
-                'Image_ID': safe_filename,
-                'Dataset': 'CheXpert',
-                'Atelectasis':  at,
-                'Cardiomegaly': cd,
-                'Effusion':     ef,
-                'Normal':       nm,
-            }
-            if NUM_CLASSES == 5:
-                record['Pneumonia'] = pn
-                
-            processed_records.append(record)
-            dst_path = os.path.join(OUTPUT_IMG_DIR, safe_filename)
-            tasks.append((src_path, dst_path))
+        processed_records.append(record)
+        dst_path = os.path.join(OUTPUT_IMG_DIR, safe_filename)
+        tasks.append((src_path, dst_path))
 
     if skipped_missing > 0:
         print(f"  [INFO] Skipped {skipped_missing} images not found on disk.")
@@ -252,6 +232,7 @@ def prepare_chexpert():
 
 def main():
     os.makedirs(OUTPUT_IMG_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(MASTER_CSV_PATH), exist_ok=True)
 
     # CheXpert first for quick verification
     chexpert_df = prepare_chexpert()
@@ -263,8 +244,7 @@ def main():
 
     master_df = pd.concat([nih_df, chexpert_df], ignore_index=True)
 
-    master_csv_path = os.path.join(OUTPUT_DIR, MASTER_CSV)
-    master_df.to_csv(master_csv_path, index=False)
+    master_df.to_csv(MASTER_CSV_PATH, index=False)
 
     print("\n==================================================")
     print(f"✅ {NUM_CLASSES}-Class Data Preparation Complete!")
@@ -272,9 +252,9 @@ def main():
     print(f"Class Counts:")
     for cls in TARGET_CLASSES:
         print(f" - {cls}: {master_df[cls].sum()}")
-    print(f"Master CSV saved to: {master_csv_path}")
+    print(f"Master CSV saved to: {MASTER_CSV_PATH}")
     print("==================================================")
-    print(f"\nNext step: zip -r {OUTPUT_DIR}.zip {OUTPUT_DIR}/")
+    print(f"\nNext step: zip -r {OUTPUT_DIR}.zip {OUTPUT_DIR}/ metadata/")
 
 if __name__ == "__main__":
     main()

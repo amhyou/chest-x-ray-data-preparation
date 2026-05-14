@@ -24,47 +24,25 @@ else:
 from unet import get_unet
 
 # ─── EXPERIMENT CONFIGURATION ─────────────────────────────
-NUM_CLASSES = 5   # Set to 4 or 5
+import config
+NUM_CLASSES = config.NUM_CLASSES
+TARGET_CLASSES = config.TARGET_CLASSES
 BATCH_SIZE = 32   # Set to 4 for local testing if GPU memory is low, 32-64 for Vast.ai
 
-if NUM_CLASSES == 5:
-    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
-    CSV_NAME = "master_384_5class_labels.csv"
-else:
-    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
-    CSV_NAME = "master_384_4class_labels.csv"
-
-# Robust Path Resolution
-# Search multiple potential locations for the dataset
-POTENTIAL_DATA_DIRS = [
-    f"/kaggle/input/thesis-dataset-5classes",  # Kaggle UI "Add Data"
-    f"data_384_{NUM_CLASSES}class",            # Local or Vast.ai standard structure
-    f".",                                      # If extracted directly into the current directory
-]
-
-INPUT_CSV = None
-RAW_IMAGES = None
-
-for d in POTENTIAL_DATA_DIRS:
-    candidate_csv = os.path.join(d, CSV_NAME)
-    if os.path.exists(candidate_csv):
-        INPUT_CSV = candidate_csv
-        RAW_IMAGES = os.path.join(d, "images")
-        break
-
-# Fallback just for metadata if A_prepare_data wasn't run but the repo has the reference CSV
-if not INPUT_CSV and os.path.exists(os.path.join("metadata", CSV_NAME)):
-    INPUT_CSV = os.path.join("metadata", CSV_NAME)
-    RAW_IMAGES = os.path.join(f"data_384_{NUM_CLASSES}class", "images")
-
-# Output paths
+# In Kaggle working dir fallback
 OUTPUT_BASE = "/kaggle/working" if os.path.exists('/kaggle/working') else "."
-ROI_OUTPUT = os.path.join(OUTPUT_BASE, f"data_roi_{NUM_CLASSES}class")
-METADATA_DIR = os.path.join(OUTPUT_BASE, "metadata")
 
-FINAL_METADATA = os.path.join(METADATA_DIR, f"DATA_ROI_{NUM_CLASSES}CLASS.csv")
+# Input Paths
+# We assume the user has the folder structure standardized in config.py
+INPUT_CSV = os.path.join(OUTPUT_BASE, config.METADATA_PATH_RAW)
+RAW_IMAGES = os.path.join(OUTPUT_BASE, config.RAW_IMAGE_DIR)
+
+# Output Paths
+ROI_OUTPUT = os.path.join(OUTPUT_BASE, config.ROI_IMAGE_DIR)
+FINAL_METADATA = os.path.join(OUTPUT_BASE, config.METADATA_PATH_ROI)
+
 WEIGHTS = "weights/cxr_reg_weights.best.hdf5"
-IMG_SIZE = 384  
+IMG_SIZE = config.IMG_SIZE
 # ──────────────────────────────────────────────────────────
 
 def load_and_preprocess_single_image(args):
@@ -172,7 +150,7 @@ def run_targeted_pipeline(args):
         download_weights_if_needed()
 
     if not os.path.exists(ROI_OUTPUT): os.makedirs(ROI_OUTPUT, exist_ok=True)
-    if not os.path.exists(METADATA_DIR): os.makedirs(METADATA_DIR, exist_ok=True)
+    if not os.path.exists(os.path.dirname(FINAL_METADATA)): os.makedirs(os.path.dirname(FINAL_METADATA), exist_ok=True)
 
     print(f"Step 1: Loading {NUM_CLASSES}-class metadata...")
     if not os.path.exists(INPUT_CSV):

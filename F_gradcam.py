@@ -22,15 +22,8 @@ IMG_SIZE    = config.IMG_SIZE
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 NUM_IMAGES_PER_CLASS = 5
 
-print("Scanning metadata to configure classes...")
-_tmp = pd.read_csv(METADATA_PATH, nrows=5)
-if config.NUM_CLASSES == 2:
-    TARGET_CLASSES = ['Effusion', 'Normal']
-elif 'Pneumonia' in _tmp.columns:
-    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal', 'Pneumonia']
-else:
-    TARGET_CLASSES = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
-NUM_CLASSES = len(TARGET_CLASSES)
+TARGET_CLASSES = config.TARGET_CLASSES
+NUM_CLASSES = config.NUM_CLASSES
 print(f"-> {NUM_CLASSES}-Class Dataset: {TARGET_CLASSES}")
 
 
@@ -143,7 +136,11 @@ def main():
     model_path  = fold_paths[0] if fold_paths else single_path
     print(f"Loading model: {model_path}")
 
-    model = VGGSwinHybridNet(num_classes=NUM_CLASSES).to(DEVICE)
+    model = VGGSwinHybridNet(
+        num_classes=NUM_CLASSES,
+        drop_path_rate=config.DROP_PATH_RATE,
+        head_dropout=config.HEAD_DROPOUT
+    ).to(DEVICE)
     if os.path.exists(model_path):
         model.load_state_dict(torch.load(model_path, map_location=DEVICE))
     else:
