@@ -71,8 +71,8 @@ class SerialGradCAM:
 
     def generate(self, input_tensor, class_idx):
         self.model.zero_grad()
-        output = self.model(input_tensor)
-        output[0, class_idx].backward()
+        outputs = self.model(input_tensor)
+        outputs[0, class_idx].backward()
 
         # ── CNN heatmap [B, C, H, W] → [H, W] ──────────────────────────
         weights = self.cnn_grad.mean(dim=(2, 3), keepdim=True)   # [B, C, 1, 1]

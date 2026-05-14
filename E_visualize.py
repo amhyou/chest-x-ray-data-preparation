@@ -45,21 +45,25 @@ def save_thesis_plot(title, filename, y_label="Metric Value", show_best=False):
 plt.figure(figsize=(10, 6))
 plt.plot(range(1, total_epochs + 1), df['Train_Loss'], label='Training Loss', color='blue', linewidth=2)
 plt.plot(range(1, total_epochs + 1), df['Val_loss'], label='Validation Loss', color='orange', linewidth=2)
-save_thesis_plot('Training vs. Validation Loss (384x384)', 'loss_curve_384.png', y_label="BCE Loss")
+save_thesis_plot(f'Training vs. Validation Loss ({config.IMG_SIZE}x{config.IMG_SIZE})', 'loss_curve.png', y_label="Loss")
 
-# 2. Accuracy Comparison (Label-Based vs. Subset)
+# 2. Accuracy
 plt.figure(figsize=(10, 6))
-plt.plot(range(1, total_epochs + 1), df['Val_acc_label_based'], label='Label-Based Accuracy (Intuitive)', color='green', linewidth=2)
-plt.plot(range(1, total_epochs + 1), df['Val_acc_subset'], label='Subset Accuracy (Strict)', color='red', linestyle='--', linewidth=2)
-plt.ylim(0, 1.0)
-save_thesis_plot('Accuracy Comparison: Label-Based vs. Subset (384x384)', 'accuracy_comparison_384.png', y_label="Accuracy")
+if 'Val_accuracy' in df.columns:
+    plt.plot(range(1, total_epochs + 1), df['Val_accuracy'], label='Accuracy', color='green', linewidth=2)
+    plt.ylim(0, 1.0)
+    save_thesis_plot(f'Accuracy Progression ({config.IMG_SIZE}x{config.IMG_SIZE})', 'accuracy_progression.png', y_label="Accuracy")
 
-# 3. Key Performance Metrics (F1 & AUC)
+# 3. Key Performance Metrics (F1 & AUC & MCC)
 plt.figure(figsize=(10, 6))
 plt.plot(range(1, total_epochs + 1), df['Val_f1_macro'], label='Macro F1-Score', color='purple')
 plt.plot(range(1, total_epochs + 1), df['Val_auc_macro'], label='Macro AUC', color='brown')
+if 'Val_mcc' in df.columns:
+    plt.plot(range(1, total_epochs + 1), df['Val_mcc'], label='MCC', color='teal')
+if 'Val_kappa' in df.columns:
+    plt.plot(range(1, total_epochs + 1), df['Val_kappa'], label="Cohen's Kappa", color='navy')
 plt.ylim(0, 1.0)
-save_thesis_plot('Key Performance Metrics (Validation) (384x384)', 'macro_metrics_trend_384.png', y_label="Score", show_best=True)
+save_thesis_plot(f'Key Performance Metrics (Validation) ({config.IMG_SIZE}x{config.IMG_SIZE})', 'macro_metrics_trend.png', y_label="Score", show_best=True)
 
 # 4. Per-Class F1 Progression
 plt.figure(figsize=(12, 7))
@@ -68,11 +72,11 @@ classes = [col.replace('Val_f1_', '') for col in df.columns if col.startswith('V
 colors = sns.color_palette("husl", len(classes))
 for cls, color in zip(classes, colors):
     plt.plot(range(1, total_epochs + 1), df[f'Val_f1_{cls}'], label=f'F1: {cls}', color=color)
-save_thesis_plot('Per-Class F1-Score Improvement (384x384)', 'per_class_f1_384.png', y_label="F1-Score")
+save_thesis_plot(f'Per-Class F1-Score Improvement ({config.IMG_SIZE}x{config.IMG_SIZE})', 'per_class_f1.png', y_label="F1-Score")
 
 print(f"Visualizations saved to '{RESULTS_DIR}/' directory.")
 print("Key plots generated:")
-print("- loss_curve_384.png")
-print("- accuracy_comparison_384.png")
-print("- macro_metrics_trend_384.png")
-print("- per_class_f1_384.png")
+print("- loss_curve.png")
+print("- accuracy_progression.png")
+print("- macro_metrics_trend.png")
+print("- per_class_f1.png")
