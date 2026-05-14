@@ -29,8 +29,8 @@ RESULTS_DIR = "results"
 LOG_FILE = os.path.join(RESULTS_DIR, "training_log.csv")
 
 # ─── TRAINING HYPERPARAMETERS (Optimized via Optuna) ──────
-BATCH_SIZE = 8
-ACCUMULATION_STEPS = 8          # Effective batch = 64
+BATCH_SIZE = 64
+ACCUMULATION_STEPS = 1          # Effective batch = 64
 EARLY_STOP_PATIENCE = 7
 MAX_GRAD_NORM = 1.0
 
