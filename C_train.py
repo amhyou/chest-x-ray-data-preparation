@@ -14,7 +14,7 @@ from PIL import Image
 from tqdm import tqdm
 from sklearn.metrics import (f1_score, accuracy_score, precision_score,
                              recall_score, roc_auc_score, average_precision_score,
-                             multilabel_confusion_matrix)
+                             multilabel_confusion_matrix, matthews_corrcoef, cohen_kappa_score)
 from sklearn.model_selection import GroupShuffleSplit
 import config
 
@@ -79,12 +79,28 @@ def evaluate(model, loader, criterion):
             images, labels = images.to(DEVICE), labels.to(DEVICE)
             outputs = model(images)
             val_loss += criterion(outputs, labels).item()
-            all_probs.append(torch.sigmoid(outputs).cpu())
+            if config.SINGLE_LABEL_MODE:
+                all_probs.append(torch.softmax(outputs, dim=1).cpu())
+            else:
+                all_probs.append(torch.sigmoid(outputs).cpu())
             all_labels.append(labels.cpu())
 
     all_probs  = torch.cat(all_probs).numpy()
     all_labels = torch.cat(all_labels).numpy()
-    all_preds  = (all_probs > 0.5).astype(float)
+    
+    if config.SINGLE_LABEL_MODE:
+        all_preds = np.zeros_like(all_probs)
+        all_preds[np.arange(len(all_probs)), all_probs.argmax(axis=1)] = 1.0
+        all_labels_idx = all_labels.argmax(axis=1)
+        all_preds_idx = all_preds.argmax(axis=1)
+        accuracy = accuracy_score(all_labels_idx, all_preds_idx)
+        mcc = matthews_corrcoef(all_labels_idx, all_preds_idx)
+        kappa = cohen_kappa_score(all_labels_idx, all_preds_idx)
+    else:
+        all_preds  = (all_probs > 0.5).astype(float)
+        accuracy = accuracy_score(all_labels, all_preds)
+        mcc = 0.0
+        kappa = 0.0
 
     mcm = multilabel_confusion_matrix(all_labels, all_preds)
     specificities = []
@@ -99,14 +115,15 @@ def evaluate(model, loader, criterion):
 
     metrics = {
         'loss': val_loss / len(loader),
-        'acc_label_based': np.mean(all_labels == all_preds),
-        'acc_subset':    accuracy_score(all_labels, all_preds),
+        'accuracy':      accuracy,
         'f1_macro':      f1_score(all_labels, all_preds, average='macro', zero_division=0),
         'precision_macro': precision_score(all_labels, all_preds, average='macro', zero_division=0),
         'recall_macro':  recall_score(all_labels, all_preds, average='macro', zero_division=0),
         'specificity_macro': np.mean(specificities),
         'auc_macro':     auc_macro,
-        'pr_auc_macro':  average_precision_score(all_labels, all_probs, average='macro')
+        'pr_auc_macro':  average_precision_score(all_labels, all_probs, average='macro'),
+        'mcc':           mcc,
+        'kappa':         kappa
     }
     for i, cls in enumerate(TARGET_CLASSES):
         metrics[f'f1_{cls}'] = f1_score(all_labels[:, i], all_preds[:, i], zero_division=0)
@@ -148,8 +165,25 @@ def main():
 
     full_df = pd.read_csv(METADATA_PATH)
 
-    # Filter for Binary Classification if NUM_CLASSES == 2
-    if config.NUM_CLASSES == 2:
+    if config.SINGLE_LABEL_MODE:
+        print("\n--- Applying SINGLE-LABEL MULTICLASS Filtering ---")
+        full_df['Total_Labels'] = full_df[TARGET_CLASSES].sum(axis=1)
+        full_df = full_df[full_df['Total_Labels'] == 1].copy()
+        full_df.drop(columns=['Total_Labels'], inplace=True)
+        full_df = full_df.drop_duplicates(subset='Image_ID').copy()
+        
+        sampled_dfs = []
+        for cls in TARGET_CLASSES:
+            cls_df = full_df[full_df[cls] == 1]
+            if len(cls_df) >= config.SAMPLES_PER_CLASS:
+                sampled_dfs.append(cls_df.sample(n=config.SAMPLES_PER_CLASS, random_state=42))
+            else:
+                print(f"WARNING: {cls} only has {len(cls_df)} exclusive images, taking all.")
+                sampled_dfs.append(cls_df)
+                
+        full_df = pd.concat(sampled_dfs).reset_index(drop=True)
+        print(f"Filtered dataset size: {len(full_df)} exclusive images.")
+    elif config.NUM_CLASSES == 2:
         print("\nFiltering dataset for pure Binary Classification (Normal vs Effusion)...")
         # Keep rows where only Effusion is 1, OR only Normal is 1, and everything else is 0
         all_diseases = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
@@ -190,8 +224,11 @@ def main():
     val_ids  = set(temp_unique.iloc[val_idx]['Image_ID'])
     test_ids = set(temp_unique.iloc[test_idx]['Image_ID'])
 
-    # Training keeps ALL duplicate rows (oversampling effect from B_preprocess.py)
-    train_df = full_df[full_df['Image_ID'].isin(train_ids)].copy()
+    if config.SINGLE_LABEL_MODE:
+        train_df = unique_df[unique_df['Image_ID'].isin(train_ids)].copy()
+    else:
+        # Training keeps ALL duplicate rows (oversampling effect from B_preprocess.py)
+        train_df = full_df[full_df['Image_ID'].isin(train_ids)].copy()
     # Validation and test use UNIQUE images only (unbiased metrics)
     val_df   = unique_df[unique_df['Image_ID'].isin(val_ids)].copy()
     test_df  = unique_df[unique_df['Image_ID'].isin(test_ids)].copy()
@@ -201,12 +238,14 @@ def main():
 
     print(f"Split -> Train (with oversampling): {len(train_df)} | Val: {len(val_df)} | Test: {len(test_df)}")
 
-    # Class weights from training labels (on deduplicated for fairness)
-    train_labels_unique = unique_df[unique_df['Image_ID'].isin(train_ids)][TARGET_CLASSES].values
-    neg_counts = (train_labels_unique == 0).sum(axis=0)
-    pos_counts = (train_labels_unique == 1).sum(axis=0)
-    pos_weight = torch.tensor(neg_counts / np.maximum(pos_counts, 1), dtype=torch.float32).to(DEVICE)
-    print(f"Class Weights: { {c: f'{w:.2f}' for c, w in zip(TARGET_CLASSES, pos_weight.cpu().tolist())} }")
+    if config.SINGLE_LABEL_MODE:
+        print(f"Class Weights: None (Dataset is balanced at {config.SAMPLES_PER_CLASS} per class)")
+    else:
+        train_labels_unique = unique_df[unique_df['Image_ID'].isin(train_ids)][TARGET_CLASSES].values
+        neg_counts = (train_labels_unique == 0).sum(axis=0)
+        pos_counts = (train_labels_unique == 1).sum(axis=0)
+        pos_weight = torch.tensor(neg_counts / np.maximum(pos_counts, 1), dtype=torch.float32).to(DEVICE)
+        print(f"Class Weights: { {c: f'{w:.2f}' for c, w in zip(TARGET_CLASSES, pos_weight.cpu().tolist())} }")
 
     train_trans = transforms.Compose([
         transforms.RandomResizedCrop(IMG_SIZE, scale=(0.85, 1.0)),
@@ -242,10 +281,15 @@ def main():
         model.swin_model.set_grad_checkpointing(enable=True)
 
 
-    bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
-    def criterion(inputs, targets):
-        smooth = targets * (1 - LABEL_SMOOTHING) + 0.5 * LABEL_SMOOTHING
-        return bce(inputs, smooth)
+    if config.SINGLE_LABEL_MODE:
+        def criterion(inputs, targets):
+            smooth = targets * (1 - LABEL_SMOOTHING) + (LABEL_SMOOTHING / NUM_CLASSES)
+            return torch.nn.functional.cross_entropy(inputs, smooth)
+    else:
+        bce = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        def criterion(inputs, targets):
+            smooth = targets * (1 - LABEL_SMOOTHING) + 0.5 * LABEL_SMOOTHING
+            return bce(inputs, smooth)
 
     # Phase schedule: (name, epochs, lr, freeze_backbone, freeze_swin)
     phases = [
@@ -347,8 +391,8 @@ def main():
                         'Train_Loss': train_loss / len(train_loader),
                         **{f'Val_{k}': v for k, v in val_metrics.items()}})
 
-            print(f"  Loss:{val_metrics['loss']:.4f} | F1:{val_metrics['f1_macro']:.4f} "
-                  f"| AUC:{val_metrics['auc_macro']:.4f} | PR-AUC:{val_metrics['pr_auc_macro']:.4f}")
+            print(f"  Loss:{val_metrics['loss']:.4f} | Acc:{val_metrics['accuracy']:.4f} | F1:{val_metrics['f1_macro']:.4f} "
+                  f"| AUC:{val_metrics['auc_macro']:.4f} | MCC:{val_metrics['mcc']:.4f}")
 
             if val_metrics['auc_macro'] > best_val_auc:
                 best_val_auc = val_metrics['auc_macro']

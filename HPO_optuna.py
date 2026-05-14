@@ -29,7 +29,20 @@ METADATA_PATH = config.METADATA_PATH
 def prepare_hpo_dataloaders(batch_size):
     full_df = pd.read_csv(METADATA_PATH)
 
-    if config.NUM_CLASSES == 2:
+    if config.SINGLE_LABEL_MODE:
+        full_df['Total_Labels'] = full_df[TARGET_CLASSES].sum(axis=1)
+        full_df = full_df[full_df['Total_Labels'] == 1].copy()
+        full_df.drop(columns=['Total_Labels'], inplace=True)
+        full_df = full_df.drop_duplicates(subset='Image_ID').copy()
+        sampled_dfs = []
+        for cls in TARGET_CLASSES:
+            cls_df = full_df[full_df[cls] == 1]
+            if len(cls_df) >= config.SAMPLES_PER_CLASS:
+                sampled_dfs.append(cls_df.sample(n=config.SAMPLES_PER_CLASS, random_state=42))
+            else:
+                sampled_dfs.append(cls_df)
+        full_df = pd.concat(sampled_dfs).reset_index(drop=True)
+    elif config.NUM_CLASSES == 2:
         all_diseases = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
         if 'Pneumonia' in full_df.columns: all_diseases.append('Pneumonia')
         full_df['disease_sum'] = full_df[all_diseases].sum(axis=1)
@@ -64,10 +77,13 @@ def prepare_hpo_dataloaders(batch_size):
     val_df   = subset_unique_df[subset_unique_df['Image_ID'].isin(val_ids)].copy()
 
     # Determine class weights
-    train_labels = subset_unique_df[subset_unique_df['Image_ID'].isin(train_ids)][TARGET_CLASSES].values
-    neg_counts = (train_labels == 0).sum(axis=0)
-    pos_counts = (train_labels == 1).sum(axis=0)
-    pos_weight = torch.tensor(neg_counts / np.maximum(pos_counts, 1), dtype=torch.float32).to(DEVICE)
+    if config.SINGLE_LABEL_MODE:
+        pos_weight = None
+    else:
+        train_labels = subset_unique_df[subset_unique_df['Image_ID'].isin(train_ids)][TARGET_CLASSES].values
+        neg_counts = (train_labels == 0).sum(axis=0)
+        pos_counts = (train_labels == 1).sum(axis=0)
+        pos_weight = torch.tensor(neg_counts / np.maximum(pos_counts, 1), dtype=torch.float32).to(DEVICE)
 
     # Note: Using PROXY_IMG_SIZE (224)
     train_trans = transforms.Compose([
@@ -138,14 +154,19 @@ def objective(trial):
         head_dropout=head_dropout
     ).to(DEVICE)
     
-    if loss_name == "BCE":
-        base_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    if config.SINGLE_LABEL_MODE:
+        def criterion(inputs, targets):
+            smooth = targets * (1 - label_smoothing) + (label_smoothing / NUM_CLASSES)
+            return torch.nn.functional.cross_entropy(inputs, smooth)
     else:
-        base_criterion = FocalLoss(pos_weight=pos_weight, gamma=2.0)
-        
-    def criterion(inputs, targets):
-        smooth = targets * (1 - label_smoothing) + 0.5 * label_smoothing
-        return base_criterion(inputs, smooth)
+        if loss_name == "BCE":
+            base_criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        else:
+            base_criterion = FocalLoss(pos_weight=pos_weight, gamma=2.0)
+            
+        def criterion(inputs, targets):
+            smooth = targets * (1 - label_smoothing) + 0.5 * label_smoothing
+            return base_criterion(inputs, smooth)
 
     if optimizer_name == "Adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
@@ -176,7 +197,8 @@ def objective(trial):
 
             optimizer.zero_grad()
             with torch.amp.autocast('cuda', enabled=torch.cuda.is_available()):
-                loss = criterion(model(images), labels)
+                outputs = model(images)
+                loss = criterion(outputs, labels)
 
             scaler.scale(loss).backward()
             scaler.step(optimizer)

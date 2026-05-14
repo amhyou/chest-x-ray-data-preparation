@@ -9,6 +9,10 @@ TARGET_CLASSES = MASTER_CLASSES[:NUM_CLASSES]
 
 IMG_SIZE = 224
 
+# ─── DATASET MODE ─────────────────────────────────────────
+SINGLE_LABEL_MODE = True
+SAMPLES_PER_CLASS = 10000
+
 # ─── PATHS ────────────────────────────────────────────────
 # Standardized zip extraction paths
 RAW_IMAGE_DIR = f"raw_{IMG_SIZE}"
@@ -29,9 +33,9 @@ RESULTS_DIR = "results"
 LOG_FILE = os.path.join(RESULTS_DIR, "training_log.csv")
 
 # ─── TRAINING HYPERPARAMETERS (Optimized via Optuna) ──────
-BATCH_SIZE = 64
+BATCH_SIZE = 128
 ACCUMULATION_STEPS = 1          # Effective batch = 64
-EARLY_STOP_PATIENCE = 7
+EARLY_STOP_PATIENCE = 8
 MAX_GRAD_NORM = 1.0
 
 # Best Optuna parameters

@@ -11,6 +11,7 @@ from torchvision import transforms
 from model import VGGSwinHybridNet
 from PIL import Image
 from sklearn.metrics import (classification_report, multilabel_confusion_matrix,
+                             confusion_matrix, ConfusionMatrixDisplay, matthews_corrcoef, cohen_kappa_score,
                              roc_auc_score, roc_curve, precision_recall_curve,
                              average_precision_score)
 from sklearn.calibration import calibration_curve
@@ -51,19 +52,31 @@ class ChestXRayDataset(Dataset):
 
 # ─── PLOTS ───────────────────────────────────────────────────────────────────
 def plot_confusion_matrix(y_true, y_pred):
-    mcm = multilabel_confusion_matrix(y_true, y_pred)
-    cols = 2 if NUM_CLASSES in (2, 4) else min(3, NUM_CLASSES)
-    rows = (NUM_CLASSES + cols - 1) // cols
-    fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 5*rows))
-    axes = axes.ravel()
-    for i, (m, name) in enumerate(zip(mcm, TARGET_CLASSES)):
-        sns.heatmap(m, annot=True, fmt='d', ax=axes[i], cmap='Blues')
-        axes[i].set_title(f'Confusion Matrix: {name}')
-        axes[i].set_xlabel('Predicted'); axes[i].set_ylabel('Actual')
-    for j in range(i + 1, len(axes)): axes[j].axis('off')
-    plt.tight_layout()
-    plt.savefig(f'{RESULTS_DIR}/confusion_matrices.png')
-    plt.close()
+    if config.SINGLE_LABEL_MODE:
+        y_true_idx = y_true.argmax(axis=1)
+        y_pred_idx = y_pred.argmax(axis=1)
+        cm = confusion_matrix(y_true_idx, y_pred_idx)
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=TARGET_CLASSES)
+        fig, ax = plt.subplots(figsize=(8, 8))
+        disp.plot(cmap='Blues', ax=ax, values_format='d')
+        plt.title('Unified Confusion Matrix')
+        plt.tight_layout()
+        plt.savefig(f'{RESULTS_DIR}/confusion_matrix.png')
+        plt.close()
+    else:
+        mcm = multilabel_confusion_matrix(y_true, y_pred)
+        cols = 2 if NUM_CLASSES in (2, 4) else min(3, NUM_CLASSES)
+        rows = (NUM_CLASSES + cols - 1) // cols
+        fig, axes = plt.subplots(rows, cols, figsize=(5*cols, 5*rows))
+        axes = axes.ravel()
+        for i, (m, name) in enumerate(zip(mcm, TARGET_CLASSES)):
+            sns.heatmap(m, annot=True, fmt='d', ax=axes[i], cmap='Blues')
+            axes[i].set_title(f'Confusion Matrix: {name}')
+            axes[i].set_xlabel('Predicted'); axes[i].set_ylabel('Actual')
+        for j in range(i + 1, len(axes)): axes[j].axis('off')
+        plt.tight_layout()
+        plt.savefig(f'{RESULTS_DIR}/confusion_matrices.png')
+        plt.close()
 
 def calculate_auc_ci(y_true, y_probs, n=N_BOOTSTRAP):
     rng = np.random.RandomState(42)
@@ -215,12 +228,24 @@ def main():
             probs = []
             with torch.no_grad(), torch.amp.autocast('cuda', enabled=torch.cuda.is_available()):
                 for images, _ in loader:
-                    probs.append(torch.sigmoid(model(images.to(DEVICE))).cpu().float())
+                    outputs = model(images.to(DEVICE))
+                    if config.SINGLE_LABEL_MODE:
+                        probs.append(torch.softmax(outputs, dim=1).cpu())
+                    else:
+                        probs.append(torch.sigmoid(outputs).cpu())
             tta_probs_list.append(torch.cat(probs).numpy())
             print(f"    TTA {t_idx+1}/{len(tta_transforms)}")
         all_probs_ensemble.append(np.mean(tta_probs_list, axis=0))
 
     all_probs = np.mean(all_probs_ensemble, axis=0)
+
+    if config.SINGLE_LABEL_MODE:
+        all_preds = np.zeros_like(all_probs)
+        all_preds[np.arange(len(all_probs)), all_probs.argmax(axis=1)] = 1.0
+    else:
+        all_preds = np.zeros_like(all_probs)
+        for i, cls in enumerate(TARGET_CLASSES):
+            all_preds[:, i] = (all_probs[:, i] >= optimal_thresholds[cls]).astype(float)
 
     # Save raw predictions for threshold_optimizer.py
     raw_df = pd.DataFrame()
@@ -229,14 +254,28 @@ def main():
         raw_df[f'prob_{cls}'] = all_probs[:, i]
     raw_df.to_csv(f'{RESULTS_DIR}/test_raw_predictions.csv', index=False)
 
-    all_preds = np.zeros_like(all_probs)
-    for i, cls in enumerate(TARGET_CLASSES):
-        all_preds[:, i] = (all_probs[:, i] >= optimal_thresholds[cls]).astype(float)
-
     print("\n" + "="*50)
     print("FINAL TEST SET PERFORMANCE")
     print("="*50)
+    
+    report_dict = classification_report(all_labels, all_preds, target_names=TARGET_CLASSES, zero_division=0, output_dict=True)
+    report_df = pd.DataFrame(report_dict).transpose()
+    report_df.to_csv(f'{RESULTS_DIR}/test_classification_report.csv')
     print(classification_report(all_labels, all_preds, target_names=TARGET_CLASSES, zero_division=0))
+
+    if config.SINGLE_LABEL_MODE:
+        all_labels_idx = all_labels.argmax(axis=1)
+        all_preds_idx = all_preds.argmax(axis=1)
+        mcc = matthews_corrcoef(all_labels_idx, all_preds_idx)
+        kappa = cohen_kappa_score(all_labels_idx, all_preds_idx)
+        print(f"Matthew's Correlation Coefficient (MCC): {mcc:.4f}")
+        print(f"Cohen's Kappa: {kappa:.4f}")
+        
+        # Add to the results list that will be saved to CSV
+        extra_results = [{'Class': 'MCC', 'AUC': mcc, 'CI_Lower': mcc, 'CI_Upper': mcc, 'AP': mcc},
+                         {'Class': 'Kappa', 'AUC': kappa, 'CI_Lower': kappa, 'CI_Upper': kappa, 'AP': kappa}]
+    else:
+        extra_results = []
 
     macro_auc = roc_auc_score(all_labels, all_probs, average='macro', multi_class='ovr')
     print(f"Macro AUC: {macro_auc:.4f}")
@@ -248,7 +287,7 @@ def main():
         print(f"  {name:15s}: AUC={auc:.4f} [95% CI: {lo:.4f}-{hi:.4f}] AP={ap:.4f}")
         results.append({'Class': name, 'AUC': auc, 'CI_Lower': lo, 'CI_Upper': hi, 'AP': ap})
 
-    pd.DataFrame(results).to_csv(f'{RESULTS_DIR}/test_performance_metrics.csv', index=False)
+    pd.DataFrame(results + extra_results).to_csv(f'{RESULTS_DIR}/test_performance_metrics.csv', index=False)
 
     print("\nGenerating plots...")
     plot_confusion_matrix(all_labels, all_preds)
