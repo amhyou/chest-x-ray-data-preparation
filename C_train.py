@@ -333,9 +333,11 @@ def main():
             ]
             valid_groups = [{'params': [p for p in g['params'] if p.requires_grad], 'lr': g['lr']}
                             for g in param_groups]
-            optimizer = torch.optim.AdamW(valid_groups, weight_decay=config.WEIGHT_DECAY)
+            optimizer_class = getattr(torch.optim, getattr(config, "OPTIMIZER", "AdamW"))
+            optimizer = optimizer_class(valid_groups, weight_decay=config.WEIGHT_DECAY)
         else:
-            optimizer = torch.optim.AdamW(
+            optimizer_class = getattr(torch.optim, getattr(config, "OPTIMIZER", "AdamW"))
+            optimizer = optimizer_class(
                 filter(lambda p: p.requires_grad, model.parameters()),
                 lr=lr, weight_decay=config.WEIGHT_DECAY
             )
