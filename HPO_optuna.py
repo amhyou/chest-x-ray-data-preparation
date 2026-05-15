@@ -18,7 +18,7 @@ from C_train import ChestXRayDataset, mixup_batch, evaluate, TARGET_CLASSES, NUM
 # ─── HPO CONFIG ──────────────────────────────────────────────────────────────
 PROXY_MODEL = 'swin_tiny_patch4_window7_224'
 PROXY_IMG_SIZE = 224
-DATA_SUBSET_FRAC = 0.15 # Use 20% of data to speed up epochs
+DATA_SUBSET_FRAC = 0.2 # Use 20% of data to speed up epochs
 EPOCHS_PER_TRIAL = 10   # Only run 10 epochs max to evaluate a hyperparameter set
 N_TRIALS = 100           # Total number of configurations to test
 
@@ -127,18 +127,17 @@ class FocalLoss(nn.Module):
 
 # ─── OPTUNA OBJECTIVE ────────────────────────────────────────────────────────
 def objective(trial):
-    # 1. Suggest Hyperparameters
+    # 1. Suggest Hyperparameters (Focusing ONLY on the Top 5 most important)
     lr              = trial.suggest_float("lr", 1e-5, 1e-3, log=True)
     weight_decay    = trial.suggest_float("weight_decay", 1e-4, 1e-1, log=True)
     mixup_alpha     = trial.suggest_float("mixup_alpha", 0.1, 0.8)
-    label_smoothing = trial.suggest_float("label_smoothing", 0.0, 0.2)
-    head_dropout    = trial.suggest_float("head_dropout", 0.2, 0.6)
     drop_path_rate  = trial.suggest_float("drop_path_rate", 0.1, 0.3)
-    
-    # Categorical structural choices
     optimizer_name  = trial.suggest_categorical("optimizer", ["Adam", "AdamW", "SGD", "RMSprop"])
-    loss_name       = trial.suggest_categorical("loss", ["BCE", "Focal"])
-    scheduler_name  = trial.suggest_categorical("scheduler", ["CosineAnnealing", "StepLR"])
+    
+    # Hardcoded defaults for hyperparameters with < 1% importance
+    label_smoothing = 0.1
+    head_dropout    = 0.3
+    loss_name       = "BCE"
     
     # 224x224 takes way less memory, so we can use a larger batch size for faster epochs.
     batch_size = 64
@@ -177,10 +176,8 @@ def objective(trial):
     else:
         optimizer = torch.optim.RMSprop(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-    if scheduler_name == "CosineAnnealing":
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS_PER_TRIAL, T_mult=1)
-    else:
-        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=4, gamma=0.5)
+    # Always use CosineAnnealing (it is vastly superior to StepLR for Vision Transformers)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=EPOCHS_PER_TRIAL, T_mult=1)
         
     scaler = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
 

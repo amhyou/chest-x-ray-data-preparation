@@ -1,17 +1,17 @@
 import os
 
 # ─── EXPERIMENT CONFIGURATION ─────────────────────────────
-# Priority order: ['Effusion', 'Normal', 'Atelectasis', 'Cardiomegaly', 'Pneumonia']
-# Example: NUM_CLASSES = 4 gives ['Effusion', 'Normal', 'Atelectasis', 'Cardiomegaly']
+# Priority order: ['Effusion', 'Normal','Cardiomegaly', 'Atelectasis', 'Pneumonia']
+# Example: NUM_CLASSES = 4 gives ['Effusion', 'Normal', 'Cardiomegaly', 'Atelectasis']
 NUM_CLASSES = 4
-MASTER_CLASSES = ['Effusion', 'Normal', 'Atelectasis', 'Cardiomegaly', 'Pneumonia']
+MASTER_CLASSES = ['Effusion', 'Normal','Cardiomegaly', 'Atelectasis', 'Pneumonia']
 TARGET_CLASSES = MASTER_CLASSES[:NUM_CLASSES]
 
 IMG_SIZE = 224
 
 # ─── DATASET MODE ─────────────────────────────────────────
 SINGLE_LABEL_MODE = True
-SAMPLES_PER_CLASS = 10000
+SAMPLES_PER_CLASS = 10_000
 
 # ─── PATHS ────────────────────────────────────────────────
 # Standardized zip extraction paths
