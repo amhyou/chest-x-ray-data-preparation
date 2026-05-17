@@ -170,19 +170,7 @@ def main():
         full_df['Total_Labels'] = full_df[TARGET_CLASSES].sum(axis=1)
         full_df = full_df[full_df['Total_Labels'] == 1].copy()
         full_df.drop(columns=['Total_Labels'], inplace=True)
-        full_df = full_df.drop_duplicates(subset='Image_ID').copy()
-        
-        sampled_dfs = []
-        for cls in TARGET_CLASSES:
-            cls_df = full_df[full_df[cls] == 1]
-            if len(cls_df) >= config.SAMPLES_PER_CLASS:
-                sampled_dfs.append(cls_df.sample(n=config.SAMPLES_PER_CLASS, random_state=42))
-            else:
-                print(f"WARNING: {cls} only has {len(cls_df)} exclusive images, taking all.")
-                sampled_dfs.append(cls_df)
-                
-        full_df = pd.concat(sampled_dfs).reset_index(drop=True)
-        print(f"Filtered dataset size: {len(full_df)} exclusive images.")
+        print(f"Filtered dataset size: {len(full_df)} exclusive single-label images.")
     elif config.NUM_CLASSES == 2:
         print("\nFiltering dataset for pure Binary Classification (Normal vs Effusion)...")
         # Keep rows where only Effusion is 1, OR only Normal is 1, and everything else is 0
@@ -224,14 +212,30 @@ def main():
     val_ids  = set(temp_unique.iloc[val_idx]['Image_ID'])
     test_ids = set(temp_unique.iloc[test_idx]['Image_ID'])
 
-    if config.SINGLE_LABEL_MODE:
-        train_df = unique_df[unique_df['Image_ID'].isin(train_ids)].copy()
-    else:
-        # Training keeps ALL duplicate rows (oversampling effect from B_preprocess.py)
-        train_df = full_df[full_df['Image_ID'].isin(train_ids)].copy()
     # Validation and test use UNIQUE images only (unbiased metrics)
     val_df   = unique_df[unique_df['Image_ID'].isin(val_ids)].copy()
     test_df  = unique_df[unique_df['Image_ID'].isin(test_ids)].copy()
+
+    if config.SINGLE_LABEL_MODE:
+        base_train_df = unique_df[unique_df['Image_ID'].isin(train_ids)].copy()
+        print(f"\nBalancing Training Set to exactly {config.SAMPLES_PER_CLASS} samples per class...")
+        sampled_dfs = []
+        for cls in TARGET_CLASSES:
+            cls_df = base_train_df[base_train_df[cls] == 1]
+            if len(cls_df) >= config.SAMPLES_PER_CLASS:
+                # Undersample unique images
+                sampled_dfs.append(cls_df.sample(n=config.SAMPLES_PER_CLASS, replace=False, random_state=42))
+            elif len(cls_df) > 0:
+                # Oversample with replacement
+                print(f"  -> Oversampling {cls}: from {len(cls_df)} up to {config.SAMPLES_PER_CLASS} images")
+                sampled_dfs.append(cls_df.sample(n=config.SAMPLES_PER_CLASS, replace=True, random_state=42))
+            else:
+                print(f"  -> WARNING: Class {cls} has 0 training images! Skipping.")
+                
+        train_df = pd.concat(sampled_dfs).sample(frac=1, random_state=42).reset_index(drop=True)
+    else:
+        # Training keeps ALL duplicate rows (oversampling effect from B_preprocess.py)
+        train_df = full_df[full_df['Image_ID'].isin(train_ids)].copy()
 
     # Save test IDs for D_test.py to reproduce the exact same split
     test_df[['Image_ID']].to_csv(f"{config.RESULTS_DIR}/test_ids_fold{FOLD}.csv", index=False)

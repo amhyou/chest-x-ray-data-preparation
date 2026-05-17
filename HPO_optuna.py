@@ -33,15 +33,6 @@ def prepare_hpo_dataloaders(batch_size):
         full_df['Total_Labels'] = full_df[TARGET_CLASSES].sum(axis=1)
         full_df = full_df[full_df['Total_Labels'] == 1].copy()
         full_df.drop(columns=['Total_Labels'], inplace=True)
-        full_df = full_df.drop_duplicates(subset='Image_ID').copy()
-        sampled_dfs = []
-        for cls in TARGET_CLASSES:
-            cls_df = full_df[full_df[cls] == 1]
-            if len(cls_df) >= config.SAMPLES_PER_CLASS:
-                sampled_dfs.append(cls_df.sample(n=config.SAMPLES_PER_CLASS, random_state=42))
-            else:
-                sampled_dfs.append(cls_df)
-        full_df = pd.concat(sampled_dfs).reset_index(drop=True)
     elif config.NUM_CLASSES == 2:
         all_diseases = ['Atelectasis', 'Cardiomegaly', 'Effusion', 'Normal']
         if 'Pneumonia' in full_df.columns: all_diseases.append('Pneumonia')
@@ -72,9 +63,22 @@ def prepare_hpo_dataloaders(batch_size):
     train_ids = set(subset_unique_df.iloc[train_idx]['Image_ID'])
     val_ids   = set(subset_unique_df.iloc[val_idx]['Image_ID'])
     
-    # Train set can use full_df to include augmented oversamples, Val set strictly unique
-    train_df = full_df[full_df['Image_ID'].isin(train_ids)].copy()
+    # Val set strictly unique
     val_df   = subset_unique_df[subset_unique_df['Image_ID'].isin(val_ids)].copy()
+
+    if config.SINGLE_LABEL_MODE:
+        base_train_df = subset_unique_df[subset_unique_df['Image_ID'].isin(train_ids)].copy()
+        target_samples = int(config.SAMPLES_PER_CLASS * DATA_SUBSET_FRAC)
+        sampled_dfs = []
+        for cls in TARGET_CLASSES:
+            cls_df = base_train_df[base_train_df[cls] == 1]
+            if len(cls_df) >= target_samples:
+                sampled_dfs.append(cls_df.sample(n=target_samples, replace=False, random_state=42))
+            elif len(cls_df) > 0:
+                sampled_dfs.append(cls_df.sample(n=target_samples, replace=True, random_state=42))
+        train_df = pd.concat(sampled_dfs).sample(frac=1, random_state=42).reset_index(drop=True)
+    else:
+        train_df = full_df[full_df['Image_ID'].isin(train_ids)].copy()
 
     # Determine class weights
     if config.SINGLE_LABEL_MODE:
