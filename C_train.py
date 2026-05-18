@@ -297,9 +297,9 @@ def main():
 
     # Phase schedule: (name, epochs, lr, freeze_backbone, freeze_swin)
     phases = [
-        ("Warmup",  5,  1e-3, True,  True),
-        ("Phase_1", 20, config.LR, True,  False),
-        ("Phase_2", 15, config.LR, False, False),
+        ("Phase_1_Bridge", 5, 1e-3, True, True),
+        ("Phase_2_Transformer", 10, config.LR, True, False),
+        ("Phase_3_End2End", 15, config.LR * 0.1, False, False),
     ]
 
     best_val_auc = 0.0
@@ -326,13 +326,12 @@ def main():
         for p in model.backbone.parameters():    p.requires_grad = not freeze_backbone
         for p in model.swin_layers.parameters(): p.requires_grad = not freeze_swin
 
-        if phase_name == "Phase_2":
+        if phase_name == "Phase_3_End2End":
             param_groups = [
                 {'params': model.head.parameters(),       'lr': lr},
-                {'params': model.se.parameters(),         'lr': lr},
                 {'params': model.bridge.parameters(),     'lr': lr},
                 {'params': model.swin_norm.parameters(),  'lr': lr},
-                {'params': model.swin_layers.parameters(),'lr': lr * 0.1},
+                {'params': model.swin_layers.parameters(),'lr': lr},
                 {'params': model.backbone.parameters(),   'lr': lr * 0.1},
             ]
             valid_groups = [{'params': [p for p in g['params'] if p.requires_grad], 'lr': g['lr']}
