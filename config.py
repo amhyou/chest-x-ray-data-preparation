@@ -11,7 +11,7 @@ IMG_SIZE = 224
 
 # ─── DATASET MODE ─────────────────────────────────────────
 SINGLE_LABEL_MODE = True
-SAMPLES_PER_CLASS = 30_000
+SAMPLES_PER_CLASS = 10_000
 
 # ─── PATHS ────────────────────────────────────────────────
 # Standardized zip extraction paths
